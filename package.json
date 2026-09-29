@@ -1,0 +1,12 @@
+{
+  "name": "nadlan-area-compare",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Draw areas on a map and compare Israeli real-estate deals between them. Data: OVER (over.org.il).",
+  "scripts": {
+    "test": "node --test tests/stats.test.mjs",
+    "serve": "npx --yes http-server -p 5190 -c-1"
+  },
+  "license": "MIT"
+}
