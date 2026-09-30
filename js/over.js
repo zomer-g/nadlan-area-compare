@@ -33,7 +33,8 @@ async function getJson(url, opts) {
   let body;
   try {
     body = await res.json();
-  } catch {
+  } catch (e) {
+    if (e.name === 'AbortError') throw e; // cancelled mid-read by a newer request
     throw new Error(`OVER החזיר תשובה לא תקינה (HTTP ${res.status})`);
   }
   if (!res.ok) {
@@ -195,6 +196,11 @@ LIMIT 1`;
 }
 
 // ── Map helpers ─────────────────────────────────────────────────────────────
+
+export async function tableFeatures(table, bbox, columns, signal) {
+  const q = new URLSearchParams({ bbox: bbox.join(','), columns, limit: '5000' });
+  return getJson(`${OVER}/api/tables/${encodeURIComponent(table)}/features?${q}`, { signal });
+}
 
 export async function parcelFeatures(bbox, signal) {
   const q = new URLSearchParams({

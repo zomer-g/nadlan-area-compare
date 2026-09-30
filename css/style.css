@@ -154,3 +154,10 @@ summary { cursor: pointer; }
   .map { min-height: 62vh; order: 1; }
   .pane { padding: .6rem; }
 }
+
+.layers-box { background: var(--panel); color: var(--text); padding: .45rem .6rem; font-size: .8rem; max-width: 230px; direction: rtl; }
+.layers-box label { display: flex; gap: .3rem; align-items: center; margin-top: .3rem; flex-wrap: wrap; }
+.layers-box select { font-size: .78rem; padding: .15rem .3rem; }
+.legend { background: var(--panel); color: var(--text); padding: .45rem .6rem; font-size: .75rem; line-height: 1.5; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,.3); max-width: 230px; direction: rtl; }
+.legend i { display: inline-block; width: 14px; height: 10px; margin-inline-end: .35rem; border: 1px solid #0003; vertical-align: middle; }
+.legend .muted { margin-top: .25rem; }

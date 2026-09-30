@@ -1,13 +1,14 @@
-import * as over from './over.js';
-import { METRICS, eligible, pointChange, logTrend, indexTo, within } from './stats.js';
+import * as over from './over.js?v=5dbd4d41de';
+import { METRICS, eligible, pointChange, logTrend, indexTo, within } from './stats.js?v=5dbd4d41de';
 import {
   SIZE_GROUPS, AGE_GROUPS, OUTLIER_METHODS, SIGMA_K, SIGMA_ROUNDS, SIGMA_MIN_N, PRESCREEN_K, SIGMA_REF_N, REFERENCE_STEPS, FIXED_RANGE, MIN_AMOUNT,
   MIN_YEAR_BUILT, MAX_YEARS_AHEAD, enrich, markOutliers, select, yearly, turnover,
-} from './analysis.js';
-import { loadExternal } from './external.js';
-import { createBrush } from './brush.js';
-import { createParcelLayer } from './parcels.js';
-import { esc } from './util.js';
+} from './analysis.js?v=5dbd4d41de';
+import { loadExternal } from './external.js?v=5dbd4d41de';
+import { createBrush } from './brush.js?v=5dbd4d41de';
+import { createParcelLayer } from './parcels.js?v=5dbd4d41de';
+import { createOverlays, OUTLINES, THEMES } from './layers.js?v=5dbd4d41de';
+import { esc } from './util.js?v=5dbd4d41de';
 
 const COLORS = ['#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c', '#0891b2', '#ca8a04', '#db2777'];
 const STORE_KEY = 'nadlan-area-compare:v2';
@@ -116,6 +117,34 @@ L.control.scale({ imperial: false, position: 'bottomleft' }).addTo(map);
 map.attributionControl.setPrefix(false);
 
 const parcels = createParcelLayer(map, (msg) => { $('#parcel-status').textContent = msg; });
+
+// Data layers, in a control right under the base-map switcher.
+const overlays = createOverlays(map, {
+  onStatus: (msg) => { const el = $('#layers-status'); if (el) el.textContent = msg; },
+  onPick: (kind, name, geometry, source) => addPicked(kind, name, geometry, source),
+});
+const layersCtl = L.control({ position: 'topleft' });
+layersCtl.onAdd = () => {
+  const div = L.DomUtil.create('div', 'leaflet-bar layers-box');
+  div.innerHTML = `<b>שכבות נתונים (OVER)</b>
+    ${Object.entries(OUTLINES).map(([k, d]) => `<label><input type="checkbox" data-outline="${k}"> ${esc(d.label)}</label>`).join('')}
+    <label>מפה נושאית
+      <select id="theme"><option value="">ללא</option>${Object.entries(THEMES).map(([k, t]) => `<option value="${k}">${esc(t.label)}</option>`).join('')}</select>
+    </label>
+    <div id="layers-status" class="muted"></div>`;
+  L.DomEvent.disableClickPropagation(div);
+  L.DomEvent.disableScrollPropagation(div);
+  $$('[data-outline]', div).forEach((c) => { c.onchange = () => overlays.setOutline(c.dataset.outline, c.checked); });
+  $('#theme', div).onchange = (e) => overlays.setTheme(e.target.value);
+  return div;
+};
+layersCtl.addTo(map);
+function syncOutlineBoxes() {
+  for (const [k, o] of Object.entries(overlays.outlines)) {
+    const c = $(`[data-outline="${k}"]`);
+    if (c) c.checked = o.on;
+  }
+}
 let highlight = null;
 
 const brush = createBrush(map, {
@@ -268,6 +297,26 @@ function setMode(m) {
     renderAreas();
   }
   $('#pick-hint').hidden = !m.startsWith('pick');
+  overlays.setPick(m === 'pick-nbr' ? 'neighborhood' : m === 'pick-stat' ? 'stat' : null);
+  syncOutlineBoxes();
+}
+
+// A polygon clicked in pick mode becomes a new area (once).
+function addPicked(kind, name, geometry, source) {
+  const L0 = OUTLINES[kind];
+  const dup = state.areas.find((a) => a.name === name && a.origin?.startsWith(over.PICK_LAYERS[kind].label));
+  if (dup) {
+    state.activeId = dup.id;
+    renderAreas();
+    setStatus(`"${name}" כבר ברשימת האזורים.`);
+    return;
+  }
+  const simple = turf.truncate(turf.simplify(turf.feature(geometry), { tolerance: 0.00002, highQuality: true }), { precision: 6 });
+  addArea({ name, geom: simple, origin: `${over.PICK_LAYERS[kind].label} — ${source}` });
+  save();
+  renderAreas();
+  markStale();
+  setStatus(`נוסף: ${name} (${L0.label})`);
 }
 $$('.seg button').forEach((b) => { b.onclick = () => setMode(b.dataset.mode); });
 document.addEventListener('keydown', (e) => {
@@ -280,6 +329,8 @@ document.addEventListener('keydown', (e) => {
 let picking = false;
 map.on('click', async (e) => {
   if (!state.mode.startsWith('pick') || picking) return;
+  const kind0 = state.mode === 'pick-nbr' ? 'neighborhood' : 'stat';
+  if (map.getZoom() >= OUTLINES[kind0].minZoom) return; // the polygon itself handles the click
   picking = true;
   const kind = state.mode === 'pick-nbr' ? 'neighborhood' : 'stat';
   const L0 = over.PICK_LAYERS[kind];
@@ -290,11 +341,7 @@ map.on('click', async (e) => {
       setStatus(`אין ${L0.label} בנקודה הזאת.`);
       return;
     }
-    const a = addArea({ name: hit.name, geom: turf.feature(hit.geometry), origin: `${L0.label} — ${L0.source}` });
-    save();
-    renderAreas();
-    markStale();
-    setStatus(`נוסף: ${hit.name}`);
+    addPicked(kind, hit.name, hit.geometry, L0.source);
 
   } catch (err) {
     setStatus(`שגיאה באיתור ${L0.label}: ${err.message}`);
@@ -754,7 +801,8 @@ function overlapNote(list) {
 function renderSegments(list) {
   const f = state.filters;
   const M = METRICS[f.metric];
-  let html = `<p class="muted small"><b>${esc(M.label)}</b> · השוואה ${yr(f.cmpFrom)}→${yr(f.cmpTo)} · הסינון לפי קבוצת גודל וגיל שבחרתם בצד חל על הגרפים וההשוואה; כאן כל קבוצה מוצגת בנפרד.</p>`;
+  let html = `<p class="muted small"><b>${esc(M.label)}</b> · השוואה ${yr(f.cmpFrom)}→${yr(f.cmpTo)} · הסינון לפי קבוצת גודל וגיל שבחרתם בצד חל על הגרפים וההשוואה; כאן כל קבוצה מוצגת בנפרד.</p>
+    <p class="note">"—" בתא = באותה שנה היו בקבוצה פחות מ-${fmt(f.minDeals)} עסקאות בשימוש, ולכן אין ממנה מספר (מגמה דורשת 3 שנים כאלה). פילוח מחלק את העסקאות לקבוצות קטנות — באזור קטן כדאי להגדיל את האזור או להוריד את "מינימום עסקאות לשנה".</p>`;
   const segTable = (a, groups, optsFor) => {
     let t = `<div class="tbl-wrap"><table><thead><tr><th>קבוצה</th><th>עסקאות בשימוש (סה"כ)</th>
       <th>${M.short} ${yr(f.cmpFrom)} (n)</th><th>${M.short} ${yr(f.cmpTo)} (n)</th><th>ממוצע · חציון · ס"ת ${yr(f.cmpTo)}</th>

@@ -30,14 +30,14 @@ export function parseCsv(text) {
 }
 
 async function csv(name) {
-  const res = await fetch(`data/external/${name}.csv`);
+  const res = await fetch(`data/external/${name}.csv`, { cache: 'no-cache' }); // revalidate: an old table must not outlive a deploy
   if (!res.ok) throw new Error(`טבלת העזר ${name} לא נטענה (HTTP ${res.status})`);
   return parseCsv((await res.text()).replace(/^﻿/, ''));
 }
 
 export async function loadExternal() {
   const [manifest, natures, gushes, settlements] = await Promise.all([
-    fetch('data/external/sources.json').then((r) => r.json()),
+    fetch('data/external/sources.json', { cache: 'no-cache' }).then((r) => r.json()),
     csv('nature_asset_type'),
     csv('gush_neighborhood'),
     csv('settlements_cbs'),
