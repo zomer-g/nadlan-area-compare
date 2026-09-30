@@ -88,8 +88,15 @@ legend { font-size: .85rem; padding: 0 .3rem; }
 #nature-notes p { margin: .35rem 0 0; padding: .3rem .45rem; background: var(--warn-bg); border-inline-start: 3px solid var(--warn-line); }
 
 .seg { display: flex; }
+.seg2 { margin-top: .35rem; }
+.seg2 button { font-size: .82rem; }
+.map.picking, .map.picking .leaflet-interactive { cursor: help !important; }
+.ages { display: grid; grid-template-columns: 1fr 1fr; gap: 0 .5rem; font-size: .85rem; }
+.ages label { display: flex; gap: .3rem; align-items: center; }
+h4 { font-size: .9rem; margin: .8rem 0 .4rem; }
 .seg button { flex: 1; border-radius: 0; }
 .seg button:first-child { border-radius: 0 6px 6px 0; }
+.seg button:only-child { border-radius: 6px; }
 .seg button:last-child { border-radius: 6px 0 0 6px; }
 .seg button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 

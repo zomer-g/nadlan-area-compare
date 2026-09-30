@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: blob: https://cdn.jsdelivr.net https://*.tile.openstreetmap.org https://server.arcgisonline.com; connect-src https://www.over.org.il https://nominatim.openstreetmap.org; base-uri 'none'; form-action 'none'; object-src 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: blob: https://cdn.jsdelivr.net https://*.tile.openstreetmap.org https://server.arcgisonline.com; connect-src 'self' https://www.over.org.il https://nominatim.openstreetmap.org; base-uri 'none'; form-action 'none'; object-src 'none'">
   <title>השוואת נדל"ן לפי אזור</title>
-  <meta name="description" content="סמנו אזורים על המפה והשוו את עסקאות המקרקעין בהם — חציון מחיר למ&quot;ר, מגמה ושינוי לאורך השנים. מקור הנתונים: גרסאות לעם (OVER).">
+  <meta name="description" content="סמנו אזורים על המפה והשוו את עסקאות המקרקעין בהם — ממוצע וחציון של מחיר למ&quot;ר לפי גודל וגיל, מגמה ושינוי לאורך השנים. מקור הנתונים: גרסאות לעם (OVER).">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%232563eb'/%3E%3Cpath d='M6 24h20M9 24V14l7-5 7 5v10' stroke='white' stroke-width='2.5' fill='none'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"
         integrity="sha384-sHL9NAb7lN7rfvG5lfHpm643Xkcjzp4jFvuavGOndn6pjVqS6ny56CAt3nsEVT4H" crossorigin="anonymous">
@@ -45,6 +45,11 @@
           <button type="button" data-mode="paint" title="צביעת אזור (B)">🖌️ מברשת</button>
           <button type="button" data-mode="erase" title="מחיקה מהאזור (E)">🧽 מחק</button>
         </div>
+        <div class="seg seg2" role="radiogroup" aria-label="בחירה מהמפה">
+          <button type="button" data-mode="pick-nbr" title="לחיצה על המפה מוסיפה את השכונה שבנקודה כאזור (שכבת השכונות של מפ&quot;י)">🏘️ בחר שכונה</button>
+          <button type="button" data-mode="pick-stat" title="לחיצה על המפה מוסיפה את האזור הסטטיסטי (למ&quot;ס 2022) שבנקודה">📊 בחר אזור סטטיסטי</button>
+        </div>
+        <p id="pick-hint" class="note small" hidden>לחצו על המפה: השכונה או האזור הסטטיסטי שבנקודה יתווספו כאזור חדש. Esc לחזרה להזזה.</p>
         <label class="field">עובי המברשת: <b id="width-out"></b>
           <input id="width" type="range" min="0" max="100" value="40">
         </label>
@@ -58,15 +63,16 @@
           <button type="button" id="add-area" class="small-btn">+ אזור חדש</button>
         </div>
         <ul id="areas" class="areas"></ul>
-        <p class="muted small">האזור המסומן בנקודה הוא האזור הפעיל — המברשת צובעת אותו. אזורים יכולים לחפוף או להכיל זה את זה.</p>
+        <p class="muted small">האזור המסומן בנקודה הוא האזור הפעיל — המברשת צובעת אותו. אזורים יכולים לחפוף או להכיל זה את זה. קו מקווקו = אזור שבו פחות ממחצית העסקאות נכנסו לחישוב.</p>
       </section>
 
       <section class="panel">
         <h2>סינון וחישוב</h2>
         <fieldset>
-          <legend>מהות העסקה</legend>
-          <div id="natures" class="natures"></div>
-          <div id="nature-notes" class="muted small"></div>
+          <legend>סוג נכס (קטגוריות מפ"י)</legend>
+          <div id="types" class="natures"><p class="muted small">טוען…</p></div>
+          <details class="small"><summary>אילו מהויות בכל סוג</summary><ul id="types-detail" class="small"></ul></details>
+          <div id="type-notes" class="muted small"></div>
         </fieldset>
         <div class="grid2">
           <label class="field">משנה <input id="year-min" type="number" min="1998" max="2100"></label>
@@ -76,11 +82,25 @@
           <label class="field">מינימום עסקאות לשנה <input id="min-deals" type="number" min="1" max="1000"></label>
           <label class="field">מדד
             <select id="metric">
-              <option value="med_pp">חציון מחיר למ"ר (מנורמל)</option>
-              <option value="med_amt">חציון שווי עסקה</option>
+              <option value="mean_pp">ממוצע מחיר למ"ר</option>
+              <option value="median_pp">חציון מחיר למ"ר</option>
+              <option value="mean_amt">ממוצע שווי עסקה</option>
+              <option value="median_amt">חציון שווי עסקה</option>
+            </select>
+          </label>
+          <label class="field">קבוצת גודל <select id="size"></select></label>
+          <label class="field">סינון חריגים
+            <select id="outlier">
+              <option value="sigma">2 סטיות תקן בכל תא</option>
+              <option value="fixed">טווח קבוע 1,000–80,000</option>
+              <option value="none">ללא</option>
             </select>
           </label>
         </div>
+        <fieldset style="margin-top:.5rem">
+          <legend>גיל הבניין במועד העסקה</legend>
+          <div id="ages" class="ages"></div>
+        </fieldset>
         <button type="button" id="compute" class="primary">חשב והשווה</button>
         <p id="compute-status" class="muted small" aria-live="polite"></p>
       </section>
@@ -92,6 +112,7 @@
   <section id="results" class="results" hidden>
     <nav class="tabs" role="tablist">
       <button type="button" data-tab="compare" class="on">השוואה</button>
+      <button type="button" data-tab="segments">פילוח</button>
       <button type="button" data-tab="charts">גרפים</button>
       <button type="button" data-tab="raw">חומר גלם</button>
       <button type="button" data-tab="method">נוסחאות ושיטה</button>
@@ -100,8 +121,9 @@
     <div data-pane="charts" class="pane" hidden>
       <div class="chart-box"><h3 id="chart-level-title"></h3><canvas id="chart-level"></canvas></div>
       <div class="chart-box"><h3 id="chart-index-title"></h3><canvas id="chart-index"></canvas></div>
-      <div class="chart-box"><h3>מספר עסקאות לשנה</h3><canvas id="chart-deals"></canvas></div>
+      <div class="chart-box"><h3>עסקאות לשנה — בשימוש מול שסוננו</h3><canvas id="chart-deals"></canvas></div>
     </div>
+    <div data-pane="segments" class="pane" hidden></div>
     <div data-pane="raw" class="pane" hidden></div>
     <div data-pane="method" class="pane" hidden></div>
   </section>

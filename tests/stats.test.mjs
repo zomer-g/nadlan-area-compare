@@ -6,17 +6,17 @@ import { eligible, pointChange, logTrend, indexTo, within } from '../js/stats.js
 const close = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} ≉ ${b}`);
 
 const series = [
-  { yr: 2018, deals: 40, n_amt: 40, med_amt: 1000000, n_pp: 38, med_pp: 20000 },
-  { yr: 2019, deals: 4, n_amt: 4, med_amt: 900000, n_pp: 4, med_pp: 99999 }, // thin
-  { yr: 2020, deals: 50, n_amt: 50, med_amt: 1100000, n_pp: 45, med_pp: 22000 },
-  { yr: 2021, deals: 30, n_amt: 30, med_amt: 1210000, n_pp: 0, med_pp: null }, // no normalized price
+  { yr: 2018, n: 38, mean: 21000, median: 20000 },
+  { yr: 2019, n: 4, mean: 99999, median: 99999 }, // thin
+  { yr: 2020, n: 45, mean: 23000, median: 22000 },
+  { yr: 2021, n: 30, mean: null, median: null }, // no value
 ];
 
-test('eligible drops thin years and years without a value, per metric', () => {
-  assert.deepEqual(eligible(series, 'med_pp', 10).map((p) => p.yr), [2018, 2020]);
-  assert.deepEqual(eligible(series, 'med_amt', 10).map((p) => p.yr), [2018, 2020, 2021]);
-  const p = eligible(series, 'med_pp', 10)[0];
-  assert.deepEqual(p, { yr: 2018, m: 20000, n: 38 });
+test('eligible drops thin years and years without a value, per statistic', () => {
+  assert.deepEqual(eligible(series, 'mean_pp', 10).map((p) => p.yr), [2018, 2020]);
+  assert.deepEqual(eligible(series, 'median_pp', 10)[0], { yr: 2018, m: 20000, n: 38 });
+  assert.deepEqual(eligible(series, 'mean_pp', 10)[0], { yr: 2018, m: 21000, n: 38 });
+  assert.deepEqual(eligible(series, 'mean_pp', 1).map((p) => p.yr), [2018, 2019, 2020]);
 });
 
 test('pointChange: percent and CAGR', () => {

@@ -14,7 +14,6 @@ export const PARCELS_TABLE = 'append_shape_ff3176b1';
 // before; /api/deals/stats reports the live one, this is only the fallback.
 let dealsTable = 'append_taxes_nadlan_full_f41fb496_fd06f5ae';
 
-export const SQL_ROW_CAP = 1000; // OVER caps every SQL answer at 1,000 rows
 
 export function getDealsTable() {
   return dealsTable;
@@ -109,53 +108,90 @@ function dealsCte(f) {
   ];
   if (f.natures?.length) where.push(`d.deal_nature IN (${f.natures.map(lit).join(', ')})`);
   return `deals AS (
-  SELECT d.*,
-    substr(d.deal_date, 7, 4)::int AS yr,
-    NULLIF(d.deal_amount, '')::numeric AS amt,
-    NULLIF(d.asset_area, '')::numeric AS sqm,
-    NULLIF(d.portion, '')::numeric AS por
+  SELECT d.*
   FROM ${getDealsTable()} d
   JOIN parcels USING (gush, chelka)
   WHERE ${where.join('\n    AND ')}
 )`;
 }
 
-// Normalized price per m²: the amount pays for `portion` of the asset, so the
-// area actually bought is asset_area × portion.
-const PPSQM = `CASE WHEN amt > 0 AND sqm > 0 AND por > 0 THEN amt / (sqm * por) END`;
+// Households in the area, from the CBS 2022 statistical areas (census 2022),
+// apportioned by the share of each statistical area's surface the drawn area
+// covers. Households approximate OCCUPIED dwellings; OVER holds no count of
+// the whole housing stock.
+export const STAT_AREAS_TABLE = 'append_cbs_pub_file_7a4d3897_38170565';
+const HOUSEHOLDS_CTE = `households AS (
+  SELECT
+    sum(NULLIF(s.hh_total_approx, '')::numeric
+        * extensions.ST_Area(extensions.ST_Intersection(extensions.ST_MakeValid(s.geom), area.g))
+        / NULLIF(extensions.ST_Area(extensions.ST_MakeValid(s.geom)), 0)) AS hh,
+    count(*) AS stat_areas,
+    count(*) FILTER (WHERE NULLIF(s.hh_total_approx, '') IS NULL) AS stat_areas_no_hh
+  FROM ${STAT_AREAS_TABLE} s, area
+  WHERE extensions.ST_Intersects(s.geom, area.g)
+)`;
 
-export function aggregateSql(geometry, f) {
+// The deals come back as ONE row holding a JSON array of compact arrays
+// (OVER caps an answer at 1,000 rows, not at its size), so every statistic is
+// computed in the browser from the deals themselves:
+//   [yyyymmdd, amount, declared|null, area, portion, year_built, rooms, nature, gush, chelka, sub, settlement_code]
+// declared is null when it equals the amount (95%+ of rows), to halve the payload.
+export const MAX_DEALS = 150000;
+export function dealsSql(geometry, f) {
+  // A guarded cast: one stray non-numeric value in a re-scraped register must
+  // not fail the whole area's query. (A 12% sample found none today.)
+  const n = (c) => `CASE WHEN ${c} ~ '^[0-9]+(\\.[0-9]+)?$' THEN ${c}::numeric END`;
   return `WITH ${areaCte(geometry)},
 ${PARCELS_CTE},
 ${dealsCte(f)},
-years AS (
-  SELECT yr,
-    count(*) AS deals,
-    count(NULLIF(amt, 0)) AS n_amt,
-    percentile_cont(0.5) WITHIN GROUP (ORDER BY NULLIF(amt, 0)) AS med_amt,
-    count(${PPSQM}) AS n_pp,
-    percentile_cont(0.5) WITHIN GROUP (ORDER BY ${PPSQM}) AS med_pp
-  FROM deals
-  GROUP BY yr
-)
+${HOUSEHOLDS_CTE}
 SELECT
   (SELECT count(*) FROM parcels) AS parcels_in_area,
   (SELECT count(DISTINCT (gush, chelka)) FROM deals) AS parcels_with_deals,
   (SELECT count(*) FROM deals) AS deals_total,
-  (SELECT coalesce(json_agg(y ORDER BY y.yr), '[]'::json) FROM years y) AS years`;
+  (SELECT hh FROM households) AS households,
+  (SELECT stat_areas FROM households) AS stat_areas,
+  (SELECT stat_areas_no_hh FROM households) AS stat_areas_no_hh,
+  (SELECT json_object_agg(code, name) FROM (
+     SELECT DISTINCT settlement_code::int AS code, settlement AS name FROM deals
+     WHERE settlement_code ~ '^[0-9]+$') s) AS settlements,
+  CASE WHEN (SELECT count(*) FROM deals) > ${MAX_DEALS} THEN NULL ELSE (
+    SELECT json_agg(json_build_array(
+      (substr(deal_date, 7, 4) || substr(deal_date, 4, 2) || substr(deal_date, 1, 2))::int,
+      ${n('deal_amount')},
+      CASE WHEN declared_amount = deal_amount THEN NULL ELSE ${n('declared_amount')} END,
+      ${n('asset_area')}, ${n('portion')}, ${n('year_built')}, ${n('room_num')},
+      deal_nature, ${n('gush')}, ${n('chelka')}, ${n('sub_chelka')}, ${n('settlement_code')})
+      ORDER BY substr(deal_date, 7, 4) || substr(deal_date, 4, 2) || substr(deal_date, 1, 2) DESC, row_hash)
+    FROM deals) END AS deals`;
 }
 
-export function rawRowsSql(geometry, f, offset = 0) {
-  return `WITH ${areaCte(geometry)},
-${PARCELS_CTE},
-${dealsCte(f)}
-SELECT settlement, gush, chelka, sub_chelka, deal_date, yr,
-  deal_amount, declared_amount, deal_nature, portion, asset_area, room_num, year_built,
-  round(${PPSQM}) AS ppsqm_normalized
-FROM deals
-ORDER BY substr(deal_date, 7, 4) || substr(deal_date, 4, 2) || substr(deal_date, 1, 2) DESC,
-  gush, chelka, sub_chelka, row_hash
-LIMIT ${SQL_ROW_CAP} OFFSET ${Number(offset)}`;
+// Click-to-select layers: the polygon under a point, simplified to ~2 m.
+export const PICK_LAYERS = {
+  neighborhood: {
+    table: 'idx.govmap_22_bd519a1c_f6a7046f',
+    label: 'שכונה',
+    name: `fname || CASE WHEN coalesce(setl_name, '') <> '' THEN ' · ' || setl_name ELSE '' END`,
+    source: 'שכבת השכונות של המרכז למיפוי ישראל (דרך OVER)',
+  },
+  stat: {
+    table: STAT_AREAS_TABLE,
+    label: 'אזור סטטיסטי',
+    name: `'א"ס ' || replace("STAT_2022", '.0', '') || ' · ' || "SHEM_YISHUV_HEB"`,
+    source: 'שכבת האזורים הסטטיסטיים 2022 של הלמ"ס (דרך OVER)',
+  },
+};
+export async function polygonAt(kind, lat, lon) {
+  const L = PICK_LAYERS[kind];
+  const sql = `SELECT ${L.name} AS name,
+  extensions.ST_AsGeoJSON(extensions.ST_SimplifyPreserveTopology(extensions.ST_MakeValid(geom), 0.00002), 6) AS geojson
+FROM ${L.table}
+WHERE extensions.ST_Intersects(geom, extensions.ST_SetSRID(extensions.ST_MakePoint(${Number(lon)}, ${Number(lat)}), 4326))
+LIMIT 1`;
+  const r = await runSql(sql);
+  const row = r.rows?.[0];
+  if (!row) return null;
+  return { name: row.name, geometry: JSON.parse(row.geojson) };
 }
 
 // ── Map helpers ─────────────────────────────────────────────────────────────

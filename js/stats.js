@@ -1,25 +1,26 @@
 // Trend math. Pure functions only — no DOM, no network — so the numbers the
 // page shows can be checked in isolation (tests/stats.test.mjs).
 //
-// Input everywhere is the per-year series the SQL returns:
-//   { yr, deals, n_amt, med_amt, n_pp, med_pp }
-// where med_pp is the median of the NORMALIZED price per m²
-// (deal_amount / (asset_area × portion)) and n_pp the number of deals it
-// was computed over.
+// Input everywhere is a per-year series from analysis.yearly():
+//   { yr, n, mean, median, sd, ... }
+// computed over the deals that survived the outlier filter, for one measure
+// (normalized price per m², or deal amount).
 
 export const METRICS = {
-  med_pp: { label: 'חציון מחיר למ"ר (מנורמל)', unit: '₪/מ"ר', count: 'n_pp' },
-  med_amt: { label: 'חציון שווי עסקה', unit: '₪', count: 'n_amt' },
+  mean_pp: { label: 'ממוצע מחיר למ"ר', short: 'ממוצע', measure: 'pp', stat: 'mean', unit: '₪/מ"ר' },
+  median_pp: { label: 'חציון מחיר למ"ר', short: 'חציון', measure: 'pp', stat: 'median', unit: '₪/מ"ר' },
+  mean_amt: { label: 'ממוצע שווי עסקה', short: 'ממוצע', measure: 'amt', stat: 'mean', unit: '₪' },
+  median_amt: { label: 'חציון שווי עסקה', short: 'חציון', measure: 'amt', stat: 'median', unit: '₪' },
 };
 
-// Years that carry enough deals to be read. A median over a handful of sales
-// swings by tens of percent on noise alone, so thin years are shown but kept
-// out of every calculation.
+// Years that carry enough deals to be read. A statistic over a handful of
+// sales swings by tens of percent on noise alone, so thin years are shown but
+// kept out of every calculation.
 export function eligible(series, metric, minDeals) {
-  const countKey = METRICS[metric].count;
+  const stat = METRICS[metric].stat;
   return series
-    .filter((r) => Number(r[countKey]) >= minDeals && Number(r[metric]) > 0)
-    .map((r) => ({ yr: Number(r.yr), m: Number(r[metric]), n: Number(r[countKey]) }));
+    .filter((r) => Number(r.n) >= minDeals && Number(r[stat]) > 0)
+    .map((r) => ({ yr: Number(r.yr), m: Number(r[stat]), n: Number(r.n) }));
 }
 
 // Change between two years: simple percent and its annualized (CAGR) form.

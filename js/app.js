@@ -1,13 +1,22 @@
 import * as over from './over.js';
 import { METRICS, eligible, pointChange, logTrend, indexTo, within } from './stats.js';
+import {
+  SIZE_GROUPS, AGE_GROUPS, OUTLIER_METHODS, SIGMA_K, SIGMA_ROUNDS, SIGMA_MIN_N, PRESCREEN_K, SIGMA_REF_N, REFERENCE_STEPS, FIXED_RANGE, MIN_AMOUNT,
+  MIN_YEAR_BUILT, MAX_YEARS_AHEAD, enrich, markOutliers, select, yearly, turnover,
+} from './analysis.js';
+import { loadExternal } from './external.js';
 import { createBrush } from './brush.js';
 import { createParcelLayer } from './parcels.js';
 import { esc } from './util.js';
 
 const COLORS = ['#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c', '#0891b2', '#ca8a04', '#db2777'];
-const STORE_KEY = 'nadlan-area-compare:v1';
+const STORE_KEY = 'nadlan-area-compare:v2';
 const THIS_YEAR = new Date().getFullYear();
-const DEFAULT_NATURE = 'דירה בבית קומות';
+const DEFAULT_TYPE = 'מגורים רווי';
+const OFF_BY_DEFAULT = new Set(['לא רלבנטי', 'סחר נדל"ן']);
+const UNMAPPED = 'לא ממופה';
+const LOW_QUALITY = 0.5; // below this share of deals in use, an area is flagged
+const PAGE = 200;
 
 const $ = (s, root = document) => root.querySelector(s);
 const $$ = (s, root = document) => [...root.querySelectorAll(s)];
@@ -19,25 +28,36 @@ function pct(v, d = 1, suffix = '%') {
   const cls = v > 0 ? 'pos' : v < 0 ? 'neg' : '';
   return `<span class="num ${cls}">${v > 0 ? '+' : ''}${fmt(v, d)}${suffix}</span>`;
 }
+const share = (v) => (v == null ? '—' : `${fmt(v * 100, 0)}%`);
 const widthFromSlider = (v) => Math.round(5 * Math.pow(400, v / 100)); // 5 m … 2 km, log scale
+const sizeLabel = (k) => SIZE_GROUPS.find((g) => g.key === k)?.label ?? k;
+const ageLabel = (k) => AGE_GROUPS.find((g) => g.key === k)?.label ?? k;
+const DROP_LABEL = { invalid: 'חסר נתון (שווי/שטח/חלק)', nosize: 'ללא גודל', outlier: 'חריג' };
+const ymd = (n) => `${String(n % 100).padStart(2, '0')}/${String(Math.floor(n / 100) % 100).padStart(2, '0')}/${Math.floor(n / 10000)}`;
 
 const state = {
   areas: [],
   activeId: null,
   refId: null,
+  mode: 'pan',
   filters: {
-    natures: [DEFAULT_NATURE],
+    types: [DEFAULT_TYPE],
     yearMin: 2008,
     yearMax: THIS_YEAR,
     cmpFrom: THIS_YEAR - 7,
     cmpTo: THIS_YEAR - 1,
     minDeals: 10,
-    metric: 'med_pp',
+    metric: 'mean_pp',
+    size: 'all',
+    ages: AGE_GROUPS.map((g) => g.key),
+    outlier: 'sigma',
   },
   natureList: [],
+  ext: null,
   register: null,
   tab: 'compare',
   rawAreaId: null,
+  rawPage: 0,
   busy: false,
 };
 const charts = {};
@@ -46,7 +66,7 @@ const charts = {};
 function save() {
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify({
-      areas: state.areas.map(({ id, name, color, geom }) => ({ id, name, color, geom })),
+      areas: state.areas.map(({ id, name, color, geom, origin }) => ({ id, name, color, geom, origin })),
       activeId: state.activeId,
       refId: state.refId,
       filters: state.filters,
@@ -55,22 +75,26 @@ function save() {
 }
 function load() {
   try {
-    const s = JSON.parse(localStorage.getItem(STORE_KEY) || 'null');
+    const s = JSON.parse(localStorage.getItem(STORE_KEY) || localStorage.getItem('nadlan-area-compare:v1') || 'null');
     if (!s) return;
     const f = s.filters || {};
-    for (const k of ['yearMin', 'yearMax', 'cmpFrom', 'cmpTo', 'minDeals']) {
-      if (Number.isInteger(f[k])) state.filters[k] = f[k];
-    }
-    if (f.metric in METRICS) state.filters.metric = f.metric;
-    if (Array.isArray(f.natures) && f.natures.every((n) => typeof n === 'string')) state.filters.natures = f.natures;
+    const F = state.filters;
+    for (const k of ['yearMin', 'yearMax', 'cmpFrom', 'cmpTo', 'minDeals']) if (Number.isInteger(f[k])) F[k] = f[k];
+    if (f.metric in METRICS) F.metric = f.metric;
+    if (f.outlier in OUTLIER_METHODS) F.outlier = f.outlier;
+    if (f.size === 'all' || SIZE_GROUPS.some((g) => g.key === f.size && g.key !== 's0')) F.size = f.size;
+    const strings = (x) => Array.isArray(x) && x.every((v) => typeof v === 'string');
+    if (strings(f.types)) F.types = f.types;
+    if (strings(f.ages)) F.ages = f.ages.filter((k) => AGE_GROUPS.some((g) => g.key === k));
     for (const a of Array.isArray(s.areas) ? s.areas : []) {
       const okGeom = a?.geom?.type === 'Feature' && ['Polygon', 'MultiPolygon'].includes(a.geom.geometry?.type);
       try {
         addArea({
           id: /^[a-z0-9]{1,40}$/.test(a?.id) ? a.id : undefined,
-          name: typeof a?.name === 'string' ? a.name.slice(0, 40) : undefined,
+          name: typeof a?.name === 'string' ? a.name.slice(0, 60) : undefined,
           color: /^#[0-9a-f]{6}$/i.test(a?.color) ? a.color : undefined,
           geom: okGeom ? a.geom : null,
+          origin: typeof a?.origin === 'string' ? a.origin.slice(0, 120) : null,
         }, false);
       } catch { /* one bad area must not lose the others */ }
     }
@@ -105,6 +129,12 @@ function getArea(id) {
   return state.areas.find((a) => a.id === id);
 }
 
+function areaStyle(a) {
+  const q = a.res && !a.res.error ? quality(a) : null;
+  const weak = q != null && q < LOW_QUALITY;
+  return { color: a.color, weight: weak ? 3 : 2, dashArray: weak ? '6 5' : null, fillOpacity: 0.22 };
+}
+
 function addArea(init = {}, activate = true) {
   const used = new Set(state.areas.map((a) => a.color));
   const n = state.areas.length + 1;
@@ -113,10 +143,11 @@ function addArea(init = {}, activate = true) {
     name: init.name || `אזור ${n}`,
     color: init.color || COLORS.find((c) => !used.has(c)) || COLORS[n % COLORS.length],
     geom: init.geom || null,
+    origin: init.origin || null, // where a picked shape came from; null when drawn
     res: null,
     layer: null,
   };
-  a.layer = L.geoJSON(null, { interactive: false, style: { color: a.color, weight: 2, fillOpacity: 0.22 } });
+  a.layer = L.geoJSON(null, { interactive: false, style: () => areaStyle(a) });
   if (a.geom) a.layer.addData(a.geom);
   a.layer.addTo(map);
   state.areas.push(a);
@@ -143,6 +174,15 @@ function removeArea(id) {
   renderResults();
 }
 
+function geometryChanged(a) {
+  a.res = null;
+  redrawArea(a);
+  save();
+  renderAreas();
+  renderResults();
+  markStale();
+}
+
 function onStroke(poly, mode) {
   if (mode !== 'paint' && mode !== 'erase') return;
   let a = getArea(state.activeId);
@@ -161,16 +201,13 @@ function onStroke(poly, mode) {
     setStatus('לא ניתן היה למזג את המשיכה: ' + e.message);
     return;
   }
-  a.res = null;
-  redrawArea(a);
-  save();
-  renderAreas();
-  renderResults();
-  markStale();
+  const EDITED = ' (נערך במברשת)';
+  if (a.origin && !a.origin.endsWith(EDITED)) a.origin += EDITED;
+  geometryChanged(a);
 }
 
 function areaSize(geom) {
-  if (!geom) return 'ריק — צבעו במברשת';
+  if (!geom) return 'ריק — צבעו במברשת או בחרו שכונה';
   const m2 = turf.area(geom);
   return m2 >= 1e6 ? `${fmt(m2 / 1e6, 2)} קמ"ר` : `${fmt(m2 / 1000, 1)} דונם`;
 }
@@ -179,23 +216,27 @@ function renderAreas() {
   const ul = $('#areas');
   ul.innerHTML = '';
   if (!state.areas.length) {
-    ul.innerHTML = '<li class="muted small">אין עדיין אזורים. בחרו "מברשת" וצבעו על המפה.</li>';
+    ul.innerHTML = '<li class="muted small">אין עדיין אזורים. צבעו במברשת, או בחרו שכונה / אזור סטטיסטי בלחיצה על המפה.</li>';
     return;
   }
   for (const a of state.areas) {
     const li = document.createElement('li');
     li.className = a.id === state.activeId ? 'active' : '';
     li.style.color = a.color;
-    const deals = a.res && !a.res.error ? ` · ${fmt(a.res.deals_total)} עסקאות` : '';
+    let meta = areaSize(a.geom);
+    if (a.res && !a.res.error) {
+      const q = quality(a);
+      meta += ` · ${fmt(a.res.deals_total)} עסקאות · ${share(q)} בשימוש${q != null && q < LOW_QUALITY ? ' ⚠' : ''}`;
+    }
     li.innerHTML = `
       <button type="button" class="swatch" style="background:${a.color}" title="הפוך לאזור הפעיל" aria-label="בחר ${esc(a.name)}"></button>
-      <input type="text" value="${esc(a.name)}" aria-label="שם האזור" maxlength="40">
+      <input type="text" value="${esc(a.name)}" aria-label="שם האזור" maxlength="60">
       <span class="acts">
         <button type="button" data-act="zoom" title="התמקד">🔍</button>
         <button type="button" data-act="clear" title="נקה את הסימון">↺</button>
         <button type="button" data-act="del" title="מחק אזור">✖</button>
       </span>
-      <span class="meta">${areaSize(a.geom)}${deals}</span>`;
+      <span class="meta">${esc(meta)}${a.origin ? `<br>${esc(a.origin)}` : ''}</span>`;
     $('.swatch', li).onclick = () => { state.activeId = a.id; save(); renderAreas(); };
     const input = $('input', li);
     input.onfocus = () => {
@@ -206,21 +247,27 @@ function renderAreas() {
     };
     input.onchange = () => { a.name = input.value.trim() || a.name; save(); renderResults(); };
     $('[data-act=zoom]', li).onclick = () => { if (a.geom) map.fitBounds(a.layer.getBounds(), { padding: [30, 30] }); };
-    $('[data-act=clear]', li).onclick = () => { a.geom = null; a.res = null; redrawArea(a); save(); renderAreas(); renderResults(); markStale(); };
+    $('[data-act=clear]', li).onclick = () => { a.geom = null; a.origin = null; geometryChanged(a); };
     $('[data-act=del]', li).onclick = () => removeArea(a.id);
     ul.appendChild(li);
   }
 }
 
-// ── controls ───────────────────────────────────────────────────────────────
+// ── modes: pan / paint / erase / pick a neighbourhood or statistical area ──
 function setMode(m) {
-  brush.setMode(m);
+  state.mode = m;
+  brush.setMode(m === 'paint' || m === 'erase' ? m : 'pan');
+  map.getContainer().classList.toggle('picking', m.startsWith('pick'));
+  // A double-click fires two clicks: in pick mode it would add the polygon twice.
+  if (m.startsWith('pick')) map.doubleClickZoom.disable();
+  else if (m === 'pan') map.doubleClickZoom.enable();
   $$('.seg button').forEach((b) => b.classList.toggle('on', b.dataset.mode === m));
-  if (m !== 'pan' && !state.areas.length) {
+  if ((m === 'paint' || m === 'erase') && !state.areas.length) {
     addArea();
     save();
     renderAreas();
   }
+  $('#pick-hint').hidden = !m.startsWith('pick');
 }
 $$('.seg button').forEach((b) => { b.onclick = () => setMode(b.dataset.mode); });
 document.addEventListener('keydown', (e) => {
@@ -228,6 +275,32 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') setMode('pan');
   else if (e.key === 'b' || e.key === 'נ') setMode('paint');
   else if (e.key === 'e' || e.key === 'ק') setMode('erase');
+});
+
+let picking = false;
+map.on('click', async (e) => {
+  if (!state.mode.startsWith('pick') || picking) return;
+  picking = true;
+  const kind = state.mode === 'pick-nbr' ? 'neighborhood' : 'stat';
+  const L0 = over.PICK_LAYERS[kind];
+  setStatus(`מאתר ${L0.label}…`);
+  try {
+    const hit = await over.polygonAt(kind, e.latlng.lat, e.latlng.lng);
+    if (!hit) {
+      setStatus(`אין ${L0.label} בנקודה הזאת.`);
+      return;
+    }
+    const a = addArea({ name: hit.name, geom: turf.feature(hit.geometry), origin: `${L0.label} — ${L0.source}` });
+    save();
+    renderAreas();
+    markStale();
+    setStatus(`נוסף: ${hit.name}`);
+
+  } catch (err) {
+    setStatus(`שגיאה באיתור ${L0.label}: ${err.message}`);
+  } finally {
+    picking = false;
+  }
 });
 
 function showWidth() {
@@ -238,8 +311,9 @@ $('#width').oninput = showWidth;
 showWidth();
 
 $('#show-parcels').onchange = (e) => parcels.setEnabled(e.target.checked);
-$('#add-area').onclick = () => { addArea(); save(); renderAreas(); if (brush.mode === 'pan') setMode('paint'); };
+$('#add-area').onclick = () => { addArea(); save(); renderAreas(); if (state.mode === 'pan') setMode('paint'); };
 
+// ── filters ────────────────────────────────────────────────────────────────
 function readFilters() {
   const f = state.filters;
   const num = (id, fallback) => {
@@ -251,9 +325,12 @@ function readFilters() {
   f.cmpFrom = num('#cmp-from', f.cmpFrom);
   f.cmpTo = num('#cmp-to', f.cmpTo);
   f.minDeals = Math.max(1, num('#min-deals', f.minDeals));
-  f.metric = $('#metric').value in METRICS ? $('#metric').value : 'med_pp';
+  f.metric = $('#metric').value in METRICS ? $('#metric').value : 'mean_pp';
+  f.outlier = $('#outlier').value in OUTLIER_METHODS ? $('#outlier').value : 'sigma';
+  f.size = $('#size').value;
+  f.ages = $$('#ages input:checked').map((i) => i.value);
   // Only once the list has loaded — an empty list must not read as "no filter".
-  if ($$('#natures input').length) f.natures = $$('#natures input:checked').map((i) => i.value);
+  if ($$('#types input').length) f.types = $$('#types input:checked').map((i) => i.value);
 }
 function writeFilters() {
   const f = state.filters;
@@ -263,41 +340,61 @@ function writeFilters() {
   $('#cmp-to').value = f.cmpTo;
   $('#min-deals').value = f.minDeals;
   $('#metric').value = f.metric;
+  $('#outlier').value = f.outlier;
+  $('#size').innerHTML = `<option value="all">כל הגדלים</option>${SIZE_GROUPS.filter((g) => g.key !== 's0')
+    .map((g) => `<option value="${g.key}">${esc(g.label)}</option>`).join('')}`;
+  $('#size').value = f.size;
+  $('#ages').innerHTML = AGE_GROUPS.map((g) => `<label><input type="checkbox" value="${g.key}" ${f.ages.includes(g.key) ? 'checked' : ''}> ${esc(g.label)}</label>`).join('');
 }
 
-// Inputs that only change how existing numbers are read re-render at once;
-// inputs that change the SQL mark the results stale.
-for (const id of ['#cmp-from', '#cmp-to', '#min-deals', '#metric']) {
-  $(id).addEventListener('change', () => { readFilters(); save(); renderResults(); });
+// Inputs that only change how the loaded deals are read re-render at once;
+// inputs that change what is fetched mark the results stale.
+for (const id of ['#cmp-from', '#cmp-to', '#min-deals', '#metric', '#outlier', '#size']) {
+  $(id).addEventListener('change', () => { readFilters(); save(); renderAreas(); restyleAreas(); renderResults(); });
 }
+$('#ages').addEventListener('change', () => { readFilters(); save(); renderResults(); });
 for (const id of ['#year-min', '#year-max']) {
   $(id).addEventListener('change', () => { readFilters(); save(); renderResults(); markStale(); });
 }
 
-function renderNatures() {
-  const box = $('#natures');
-  box.innerHTML = state.natureList.slice(0, 25).map((n) => `
-    <label><input type="checkbox" value="${esc(n.nature)}" ${state.filters.natures.includes(n.nature) ? 'checked' : ''}>
-      ${esc(n.nature)} <span class="cnt num">${fmt(n.deals)}</span></label>`).join('');
-  box.onchange = () => { readFilters(); save(); renderNatureNotes(); renderResults(); markStale(); };
-  renderNatureNotes();
+function typeOf(nature) {
+  return state.ext?.natureType.get(nature) || UNMAPPED;
 }
-function renderNatureNotes() {
-  const notes = state.natureList.filter((n) => state.filters.natures.includes(n.nature) && n.note);
-  let html = notes.map((n) => `<p>${esc(n.note)}</p>`).join('');
-  if (!state.filters.natures.length) {
-    html = '<p>לא נבחרה מהות — החישוב יערבב דירות, מגרשים וקרקע, ושינוי בתמהיל ייראה כשינוי מחיר.</p>' + html;
-  } else if (state.filters.natures.length > 1) {
-    html += '<p>נבחרו כמה סוגי עסקאות — שינוי בתמהיל ביניהם לאורך השנים ישפיע על החציון.</p>';
+
+function renderTypes() {
+  const byType = new Map();
+  for (const n of state.natureList) {
+    const t = typeOf(n.nature);
+    if (!byType.has(t)) byType.set(t, { deals: 0, natures: [] });
+    byType.get(t).deals += n.deals;
+    byType.get(t).natures.push(n.nature);
   }
-  $('#nature-notes').innerHTML = html;
+  const list = [...byType.entries()].sort((a, b) => b[1].deals - a[1].deals);
+  $('#types').innerHTML = list.map(([t, v]) => `
+    <label title="${esc(v.natures.join(' · '))}"><input type="checkbox" value="${esc(t)}" ${state.filters.types.includes(t) ? 'checked' : ''}>
+      ${esc(t)}${OFF_BY_DEFAULT.has(t) ? ' <span class="muted">(מחוץ לניתוח המגורים)</span>' : ''} <span class="cnt num">${fmt(v.deals)}</span></label>`).join('');
+  $('#types-detail').innerHTML = list.map(([t, v]) => `<li><b>${esc(t)}:</b> ${esc(v.natures.join(' · '))}</li>`).join('');
+  $('#types').onchange = () => { readFilters(); save(); renderTypeNotes(); renderResults(); markStale(); };
+  renderTypeNotes();
+}
+function selectedNatures(types = state.filters.types) {
+  return state.natureList.filter((n) => types.includes(typeOf(n.nature))).map((n) => n.nature);
+}
+function renderTypeNotes() {
+  const natures = new Set(selectedNatures());
+  const notes = state.natureList.filter((n) => natures.has(n.nature) && n.note);
+  let html = notes.map((n) => `<p>${esc(n.note)}</p>`).join('');
+  if (!state.filters.types.length) html = '<p>לא נבחר סוג נכס.</p>';
+  else if (state.filters.types.length > 1) html += '<p>נבחרו כמה סוגי נכס — שינוי בתמהיל ביניהם לאורך השנים ישפיע על הממוצע.</p>';
+  $('#type-notes').innerHTML = html;
 }
 
 function setStatus(msg) {
   $('#compute-status').textContent = msg;
 }
 function markStale() {
-  if (state.areas.some((a) => a.geom)) setStatus('הסינון או האזורים השתנו — לחצו "חשב והשווה" לעדכון.');
+  if (state.areas.some((a) => a.geom && !a.res)) setStatus('יש אזורים שלא חושבו או שהשתנו — לחצו "חשב והשווה".');
+  else if (state.areas.some((a) => a.res) && queriedDiffers(computed())) setStatus('הסינון השתנה — לחצו "חשב והשווה" לעדכון.');
 }
 
 // ── search ─────────────────────────────────────────────────────────────────
@@ -324,7 +421,8 @@ $('#search-form').onsubmit = async (e) => {
       const r = await over.gushExtent(g[1]);
       if (!r) throw new Error(`גוש ${g[1]} לא נמצא בשכבת החלקות`);
       showHighlight(r.box);
-      out.innerHTML = `<li class="muted">גוש ${esc(g[1])} · ${fmt(r.parcels)} חלקות</li>`;
+      const nbr = state.ext?.neighborhoodOf(Number(g[1]));
+      out.innerHTML = `<li class="muted">גוש ${esc(g[1])} · ${fmt(r.parcels)} חלקות${nbr ? ` · שכונה לפי טבלת העזר: ${esc(nbr)}` : ''}</li>`;
     } else {
       const res = await over.geocode(q);
       if (!res.length) throw new Error('לא נמצאו תוצאות');
@@ -359,19 +457,30 @@ function queryGeometry(geom) {
   return g.geometry;
 }
 
+const parseJson = (v) => (typeof v === 'string' ? JSON.parse(v) : v);
+
 async function compute() {
   if (state.busy) return;
   readFilters();
   save();
   const areas = state.areas.filter((a) => a.geom);
   if (!areas.length) {
-    setStatus('אין אזור מסומן. בחרו "מברשת" וצבעו על המפה.');
+    setStatus('אין אזור מסומן. צבעו במברשת או בחרו שכונה.');
+    return;
+  }
+  if (!state.natureList.length || !state.ext) {
+    setStatus('רשימת סוגי העסקאות עדיין נטענת — נסו שוב בעוד רגע.');
+    return;
+  }
+  const f = state.filters;
+  const natures = selectedNatures();
+  if (!natures.length) {
+    setStatus('לא נבחר סוג נכס.');
     return;
   }
   state.busy = true;
   $('#compute').disabled = true;
-  const f = state.filters;
-  const sqlFilters = { natures: [...f.natures], yearMin: f.yearMin, yearMax: f.yearMax };
+  const sqlFilters = { types: [...f.types], natures, yearMin: f.yearMin, yearMax: f.yearMax };
   let failed = 0;
   try {
     for (const [i, a] of areas.entries()) {
@@ -379,22 +488,30 @@ async function compute() {
       let sql = '';
       try {
         const geometry = queryGeometry(g0);
-        const sig = JSON.stringify([geometry, sqlFilters]);
+        const sig = JSON.stringify([geometry, natures, f.yearMin, f.yearMax]);
         if (a.res && !a.res.error && a.res.sig === sig) continue;
         setStatus(`מחשב ${i + 1}/${areas.length}: ${a.name}…`);
-        sql = over.aggregateSql(geometry, sqlFilters);
+        sql = over.dealsSql(geometry, sqlFilters);
         const r = await over.runSql(sql);
         // Edited, cleared or deleted while the query ran: the answer is for a shape that no longer exists.
         if (a.geom !== g0 || !state.areas.includes(a)) continue;
         const row = r.rows[0];
-        const years = typeof row.years === 'string' ? JSON.parse(row.years) : row.years;
+        const raw = parseJson(row.deals);
+        if (raw == null && Number(row.deals_total) > 0) {
+          throw new Error(`באזור ${fmt(row.deals_total)} עסקאות — יותר מ-${fmt(over.MAX_DEALS)} שהדפדפן יכול לעבד. צמצמו את האזור, את טווח השנים או את סוגי הנכס.`);
+        }
         a.res = {
           sig, sql, geometry, filters: sqlFilters,
           parcels_in_area: Number(row.parcels_in_area),
           parcels_with_deals: Number(row.parcels_with_deals),
           deals_total: Number(row.deals_total),
-          years,
-          raw: null,
+          households: row.households == null ? null : Number(row.households),
+          stat_areas: Number(row.stat_areas),
+          stat_areas_no_hh: Number(row.stat_areas_no_hh),
+          settlements: parseJson(row.settlements) || {},
+          deals: (raw || []).map((d) => enrich(d, state.ext.natureType)),
+          outlierMethod: null,
+          outlierReport: null,
         };
       } catch (e) {
         if (a.geom !== g0 || !state.areas.includes(a)) continue;
@@ -405,37 +522,81 @@ async function compute() {
       }
     }
     setStatus(failed ? `הושלם, ${failed} אזורים נכשלו — ראו פירוט בטבלה.` : 'הושלם.');
+    markStale(); // an area added or edited while this ran is still pending
   } finally {
     state.busy = false;
     $('#compute').disabled = false;
   }
   renderAreas();
+  restyleAreas();
   renderResults();
   $('#results').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 $('#compute').onclick = compute;
 
 // ── analysis ───────────────────────────────────────────────────────────────
-function analyse(a) {
+// The outlier filter depends only on the method, so it is re-run only when the
+// method changes; everything downstream is cheap.
+function prepared(a) {
+  const m = state.filters.outlier;
+  if (a.res.outlierMethod !== m) {
+    a.res.outlierReport = markOutliers(a.res.deals, m);
+    a.res.outlierMethod = m;
+  }
+  return a.res.deals;
+}
+
+function selection(a, { size = state.filters.size, ages = state.filters.ages } = {}) {
+  return select(prepared(a), {
+    sizes: size === 'all' ? null : new Set([size]),
+    ages: ages.length === AGE_GROUPS.length ? null : new Set(ages),
+  });
+}
+
+function analyse(a, opts) {
   const f = state.filters;
-  const points = eligible(a.res.years, f.metric, f.minDeals);
+  const M = METRICS[f.metric];
+  const rows = yearly(selection(a, opts), M.measure);
+  const points = eligible(rows, f.metric, f.minDeals);
   const win = within(points, f.cmpFrom, f.cmpTo);
   return {
+    rows,
     points,
     win,
     change: pointChange(points, f.cmpFrom, f.cmpTo),
     trend: logTrend(win),
     index: indexTo(points, f.cmpFrom),
     at: (y) => points.find((p) => p.yr === y) || null,
+    row: (y) => rows.find((r) => r.yr === y) || null,
   };
+}
+
+// Share of the area's deals that make it into the price statistics.
+function quality(a) {
+  const ds = prepared(a);
+  return ds.length ? ds.filter((d) => d.drop == null).length / ds.length : null;
+}
+
+// Turnover over the full years of the comparison window that were actually
+// fetched; all fetched deals of the chosen asset types, regardless of the size
+// and age selection (the household count is not split by size either).
+function turnoverOf(a, q) {
+  const f = state.filters;
+  const from = Math.max(f.cmpFrom, q.yearMin);
+  const to = Math.min(f.cmpTo, q.yearMax, THIS_YEAR - 1);
+  return turnover(a.res.deals, a.res.households, from, to);
+}
+
+function restyleAreas() {
+  for (const a of state.areas) a.layer.setStyle(() => areaStyle(a));
 }
 
 function computed() {
   return state.areas.filter((a) => a.res && a.geom);
 }
 
-// The filters the shown numbers were actually computed with (every area of a
-// compute shares them), which can differ from the inputs once the user edits.
+// The filters the shown numbers were fetched with (every area of a compute
+// shares them), which can differ from the inputs once the user edits.
 function queried(list) {
   return list.find((a) => a.res?.filters)?.res.filters || state.filters;
 }
@@ -443,7 +604,7 @@ function queriedDiffers(list) {
   const q = queried(list);
   const f = state.filters;
   return q.yearMin !== f.yearMin || q.yearMax !== f.yearMax
-    || JSON.stringify([...q.natures].sort()) !== JSON.stringify([...f.natures].sort());
+    || JSON.stringify([...(q.types || [])].sort()) !== JSON.stringify([...f.types].sort());
 }
 
 function reference(list) {
@@ -457,8 +618,10 @@ function renderResults() {
   $('#results').hidden = !list.length;
   if (!list.length) return;
   renderCompare(list);
+  renderSegments(list);
   renderRaw(list);
   renderMethod(list);
+  if (state.tab === 'compare') renderCompareChart(list);
   if (state.tab === 'charts') renderCharts(list);
 }
 
@@ -468,6 +631,7 @@ $$('.tabs button').forEach((b) => {
     $$('.tabs button').forEach((x) => x.classList.toggle('on', x === b));
     $$('.pane').forEach((p) => { p.hidden = p.dataset.pane !== state.tab; });
     if (state.tab === 'charts') renderCharts(computed());
+    if (state.tab === 'compare') renderCompareChart(computed());
   };
 });
 
@@ -475,62 +639,77 @@ function dot(a) {
   return `<span class="dot" style="background:${a.color}"></span>${esc(a.name)}`;
 }
 
+function viewLabel() {
+  const f = state.filters;
+  const ages = f.ages.length === AGE_GROUPS.length ? 'כל הגילים' : f.ages.map(ageLabel).join(', ');
+  return `${METRICS[f.metric].label} · ${f.size === 'all' ? 'כל הגדלים' : sizeLabel(f.size)} · ${ages} · סינון חריגים: ${OUTLIER_METHODS[f.outlier].label}`;
+}
+
 function renderCompare(list) {
   const f = state.filters;
   const M = METRICS[f.metric];
+  const other = M.stat === 'mean' ? 'median' : 'mean';
   const ref = reference(list);
   const refA = ref ? analyse(ref) : null;
   const q = queried(list);
-  const partial = f.cmpTo >= THIS_YEAR || q.yearMax >= THIS_YEAR;
-  let html = `<p class="muted small">מדד: <b>${M.label}</b> · השוואה בין ${yr(f.cmpFrom)} ל-${yr(f.cmpTo)} ·
-    שנים עם פחות מ-${fmt(f.minDeals)} עסקאות אינן נכנסות לחישוב · מהות: ${esc(q.natures.join(', ') || 'הכל')} ·
-    שנים ${yr(q.yearMin)}–${yr(q.yearMax)}</p>`;
-  if (queriedDiffers(list)) html += '<p class="note">הסינון (מהות או טווח שנים) השתנה מאז החישוב — המספרים כאן עדיין לפי הסינון שמוצג למעלה. לחצו "חשב והשווה" לעדכון.</p>';
+  let html = `<p class="muted small"><b>${esc(viewLabel())}</b><br>
+    השוואה בין ${yr(f.cmpFrom)} ל-${yr(f.cmpTo)} · שנים עם פחות מ-${fmt(f.minDeals)} עסקאות בשימוש אינן נכנסות לחישוב ·
+    סוג נכס: ${esc((q.types || []).join(', '))} · שנים ${yr(q.yearMin)}–${yr(q.yearMax)}</p>`;
+  if (queriedDiffers(list)) html += '<p class="note">סוג הנכס או טווח השנים השתנו מאז החישוב — המספרים כאן לפי הסינון שמוצג למעלה. לחצו "חשב והשווה" לעדכון.</p>';
   if (f.cmpFrom < q.yearMin || f.cmpTo > q.yearMax) {
     html += `<p class="note">שנות ההשוואה (${yr(f.cmpFrom)}, ${yr(f.cmpTo)}) חורגות מטווח השנים שנשלף (${yr(q.yearMin)}–${yr(q.yearMax)}) — הרחיבו את הטווח וחשבו מחדש.</p>`;
   }
-  if (partial) html += `<p class="note">שנת ${THIS_YEAR} עדיין לא הסתיימה, והמאגר מתעדכן באיחור — נתוני השנה הנוכחית חלקיים.</p>`;
+  if (f.cmpTo >= THIS_YEAR) html += `<p class="note">שנת ${THIS_YEAR} עדיין לא הסתיימה והמאגר מתעדכן באיחור — הנתונים שלה חלקיים ואין לקרוא אותם כירידה בשוק.</p>`;
   if (f.cmpTo <= f.cmpFrom) html += '<p class="note">שנת ההשוואה צריכה להיות מאוחרת משנת הבסיס.</p>';
 
+  html += `<div class="chart-box"><h3 id="chart-compare-title"></h3><canvas id="chart-compare"></canvas></div>`;
+
   html += `<div class="tbl-wrap"><table><thead><tr>
-    <th>ייחוס</th><th>אזור</th><th>חלקות באזור</th><th>חלקות עם עסקאות</th><th>עסקאות בטווח</th>
-    <th>${M.label}<br>${yr(f.cmpFrom)} (n)</th><th>${M.label}<br>${yr(f.cmpTo)} (n)</th>
+    <th>ייחוס</th><th>אזור</th><th>חלקות באזור / עם עסקאות</th><th>עסקאות שנשלפו</th><th>בשימוש לחישוב</th>
+    <th>${M.short} ${yr(f.cmpFrom)} (n)</th><th>${M.short} ${yr(f.cmpTo)} (n)</th><th>${METRICS[f.metric.replace(M.stat, other)].short} ${yr(f.cmpTo)} · ס"ת</th>
     <th>שינוי ${yr(f.cmpFrom)}→${yr(f.cmpTo)}</th><th>שינוי שנתי ממוצע (CAGR)</th>
-    <th>מגמה שנתית (רגרסיה)</th><th>R²</th><th>רמת מחיר ביחס לייחוס (${yr(f.cmpTo)})</th><th>פער מגמה מול הייחוס</th>
+    <th>מגמה שנתית (רגרסיה)</th><th>R²</th><th>רמת מחיר ביחס לייחוס</th><th>פער מגמה מול הייחוס</th>
+    <th>עסקאות לשנה ל-1,000 משקי בית</th>
   </tr></thead><tbody>`;
   for (const a of list) {
     if (a.res.error) {
-      html += `<tr><td></td><td>${dot(a)}</td><td colspan="11" class="neg">${esc(a.res.error)}</td></tr>`;
+      html += `<tr><td></td><td>${dot(a)}</td><td colspan="13" class="neg">${esc(a.res.error)}</td></tr>`;
       continue;
     }
     const x = analyse(a);
     const from = x.at(f.cmpFrom);
     const to = x.at(f.cmpTo);
+    const toRow = x.row(f.cmpTo);
     const refTo = refA?.at(f.cmpTo);
     const isRef = ref && a.id === ref.id;
     const ratio = to && refTo ? (to.m / refTo.m) * 100 : null;
     const gap = x.trend && refA?.trend && !isRef ? x.trend.annualPct - refA.trend.annualPct : null;
+    const q2 = quality(a);
+    const turn = turnoverOf(a, q);
     html += `<tr>
       <td><input type="radio" name="ref" value="${a.id}" ${isRef ? 'checked' : ''} aria-label="אזור ייחוס"></td>
       <td>${dot(a)}</td>
-      <td class="n">${fmt(a.res.parcels_in_area)}</td>
-      <td class="n">${fmt(a.res.parcels_with_deals)}</td>
+      <td class="n">${fmt(a.res.parcels_in_area)} / ${fmt(a.res.parcels_with_deals)}</td>
       <td class="n">${fmt(a.res.deals_total)}</td>
-      <td class="n">${from ? `${fmt(from.m)} (${fmt(from.n)})` : '<span class="muted">אין מספיק עסקאות</span>'}</td>
-      <td class="n">${to ? `${fmt(to.m)} (${fmt(to.n)})` : '<span class="muted">אין מספיק עסקאות</span>'}</td>
+      <td class="n ${q2 != null && q2 < LOW_QUALITY ? 'neg' : ''}">${share(q2)}</td>
+      <td class="n">${from ? `${fmt(from.m)} (${fmt(from.n)})` : '<span class="muted">אין מספיק</span>'}</td>
+      <td class="n">${to ? `${fmt(to.m)} (${fmt(to.n)})` : '<span class="muted">אין מספיק</span>'}</td>
+      <td class="n">${toRow ? `${fmt(toRow[other])} · ${fmt(toRow.sd)}` : '—'}</td>
       <td class="n">${pct(x.change?.pct)}</td>
       <td class="n">${pct(x.change?.cagr, 2)}</td>
       <td class="n">${x.trend ? pct(x.trend.annualPct, 2) + ` <span class="muted">(${x.trend.n} שנים)</span>` : '—'}</td>
       <td class="n">${x.trend ? fmt(x.trend.r2, 2) : '—'}</td>
       <td class="n">${isRef ? '100 (ייחוס)' : ratio != null ? fmt(ratio, 1) : '—'}</td>
       <td class="n">${isRef ? '—' : gap != null ? pct(gap, 2, ' נ"א') : '—'}</td>
+      <td class="n">${turn ? `${fmt(turn.per1000, 1)} <span class="muted">(${fmt(a.res.households)} מ"ב${a.res.stat_areas_no_hh ? `; ל-${fmt(a.res.stat_areas_no_hh)} א"ס אין נתון ⚠` : ''})</span>` : '—'}</td>
     </tr>`;
   }
   html += '</tbody></table></div>';
 
   html += summarySentences(list, ref);
   html += overlapNote(list);
-  html += `<p class="muted small">n = מספר העסקאות שמאחורי החציון. "נ"א" = נקודות אחוז. הנוסחאות המלאות, עם המספרים שהוצבו בהן, בלשונית "נוסחאות ושיטה"; השורות עצמן בלשונית "חומר גלם".</p>`;
+  html += `<p class="muted small">n = מספר העסקאות שמאחורי הסטטיסטיקה, אחרי סינון החריגים. ס"ת = סטיית תקן. "בשימוש לחישוב" = חלק העסקאות שנשלפו שנכנסו לחישוב המחיר (לא חסר בהן נתון, יש להן גודל ואינן חריגות); אזור מתחת ל-${share(LOW_QUALITY)} מסומן ⚠ ובקו מקווקו על המפה.
+    משקי בית: מפקד 2022, לפי החלק של כל אזור סטטיסטי שבתוך האזור — קירוב למלאי הדירות המאוכלסות, לא לכל המלאי. הפירוט לפי קבוצות גודל וגיל בלשונית "פילוח".</p>`;
   const pane = $('[data-pane=compare]');
   pane.innerHTML = html;
   $$('input[name=ref]', pane).forEach((r) => {
@@ -569,58 +748,138 @@ function overlapNote(list) {
   return `<p class="note">אזורים חופפים: ${pairs.join('; ')}. עסקאות בחלקות שבחפיפה נספרות בכל אחד מהאזורים — ההשוואה היא בין אזורים, לא בין קבוצות זרות של עסקאות.</p>`;
 }
 
-function renderCharts(list) {
+// One table per area: the same trend read separately for each size group
+// (and each age group), because small and large flats trade at systematically
+// different prices per m² and a pooled number hides that.
+function renderSegments(list) {
   const f = state.filters;
   const M = METRICS[f.metric];
-  const ok = list.filter((a) => !a.res.error);
-  $('#chart-level-title').textContent = `${M.label} (${M.unit}) לפי שנה — רק שנים עם ${f.minDeals}+ עסקאות`;
-  $('#chart-index-title').textContent = `מדד: ${f.cmpFrom} = 100`;
+  let html = `<p class="muted small"><b>${esc(M.label)}</b> · השוואה ${yr(f.cmpFrom)}→${yr(f.cmpTo)} · הסינון לפי קבוצת גודל וגיל שבחרתם בצד חל על הגרפים וההשוואה; כאן כל קבוצה מוצגת בנפרד.</p>`;
+  const segTable = (a, groups, optsFor) => {
+    let t = `<div class="tbl-wrap"><table><thead><tr><th>קבוצה</th><th>עסקאות בשימוש (סה"כ)</th>
+      <th>${M.short} ${yr(f.cmpFrom)} (n)</th><th>${M.short} ${yr(f.cmpTo)} (n)</th><th>ממוצע · חציון · ס"ת ${yr(f.cmpTo)}</th>
+      <th>שינוי</th><th>CAGR</th><th>מגמה שנתית</th><th>R²</th></tr></thead><tbody>`;
+    for (const g of groups) {
+      const x = analyse(a, optsFor(g));
+      const used = x.rows.reduce((s, r) => s + r.used, 0);
+      const from = x.at(f.cmpFrom);
+      const to = x.at(f.cmpTo);
+      const r = x.row(f.cmpTo);
+      t += `<tr><td>${esc(g.label)}</td><td class="n">${fmt(used)}</td>
+        <td class="n">${from ? `${fmt(from.m)} (${fmt(from.n)})` : '—'}</td>
+        <td class="n">${to ? `${fmt(to.m)} (${fmt(to.n)})` : '—'}</td>
+        <td class="n">${r ? `${fmt(r.mean)} · ${fmt(r.median)} · ${fmt(r.sd)}` : '—'}</td>
+        <td class="n">${pct(x.change?.pct)}</td><td class="n">${pct(x.change?.cagr, 2)}</td>
+        <td class="n">${x.trend ? pct(x.trend.annualPct, 2) : '—'}</td><td class="n">${x.trend ? fmt(x.trend.r2, 2) : '—'}</td></tr>`;
+    }
+    return t + '</tbody></table></div>';
+  };
+  for (const a of list) {
+    html += `<div class="area-block"><h3>${dot(a)}</h3>`;
+    if (a.res.error) {
+      html += `<p class="neg">${esc(a.res.error)}</p></div>`;
+      continue;
+    }
+    html += `<h4>לפי קבוצת גודל <span class="muted small">(גיל: ${f.ages.length === AGE_GROUPS.length ? 'כל הגילים' : esc(f.ages.map(ageLabel).join(', '))})</span></h4>`;
+    html += segTable(a, SIZE_GROUPS.filter((g) => g.key !== 's0'), (g) => ({ size: g.key }));
+    html += `<h4>לפי גיל הבניין במועד העסקה <span class="muted small">(גודל: ${f.size === 'all' ? 'כל הגדלים' : esc(sizeLabel(f.size))})</span></h4>`;
+    html += segTable(a, AGE_GROUPS, (g) => ({ ages: [g.key] }));
+    html += '</div>';
+  }
+  $('[data-pane=segments]').innerHTML = html;
+}
+
+// ── charts ─────────────────────────────────────────────────────────────────
+function chartYears(list) {
   const q = queried(list);
   const years = [];
   for (let y = q.yearMin; y <= q.yearMax; y++) years.push(y);
-  const common = {
-    responsive: true,
-    maintainAspectRatio: false,
-    interaction: { mode: 'index', intersect: false },
-    plugins: { legend: { rtl: true, textDirection: 'rtl' }, tooltip: { rtl: true, textDirection: 'rtl' } },
+  return years;
+}
+
+// The current year is partial: dashed into it, hollow point on it.
+function lineDataset(a, years, values) {
+  const partial = (i) => years[i] === THIS_YEAR;
+  return {
+    label: a.name,
+    data: years.map((y) => values.get(y) ?? null),
+    borderColor: a.color,
+    backgroundColor: a.color,
+    spanGaps: true,
+    tension: 0.15,
+    segment: { borderDash: (ctx) => (partial(ctx.p1DataIndex) ? [5, 4] : undefined) },
+    pointBackgroundColor: years.map((y) => (y === THIS_YEAR ? 'transparent' : a.color)),
+    pointRadius: years.map((y) => (y === THIS_YEAR ? 5 : 3)),
   };
-  const datasets = (fn) => ok.map((a) => {
-    const values = fn(a);
-    return {
-      label: a.name,
-      data: years.map((y) => values.get(y) ?? null),
-      borderColor: a.color,
-      backgroundColor: a.color,
-      spanGaps: true,
-      tension: 0.15,
-    };
+}
+
+function drawChart(id, type, data, extra = {}) {
+  charts[id]?.destroy();
+  const canvas = $(`#${id}`);
+  if (!canvas) return;
+  canvas.parentElement.style.height = '340px';
+  charts[id] = new Chart(canvas, {
+    type,
+    data,
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { rtl: true, textDirection: 'rtl' }, tooltip: { rtl: true, textDirection: 'rtl' } },
+      ...extra,
+    },
   });
-  const make = (id, type, data, extra = {}) => {
-    charts[id]?.destroy();
-    $(`#${id}`).parentElement.style.height = '340px';
-    charts[id] = new Chart($(`#${id}`), { type, data, options: { ...common, ...extra } });
+}
+
+function levelData(list) {
+  const years = chartYears(list);
+  return {
+    labels: years.map((y) => (y === THIS_YEAR ? `${y} (חלקית)` : y)),
+    datasets: list.filter((a) => !a.res.error).map((a) =>
+      lineDataset(a, years, new Map(analyse(a).points.map((p) => [p.yr, Math.round(p.m)])))),
   };
-  make('chart-level', 'line', {
+}
+
+function renderCompareChart(list) {
+  const f = state.filters;
+  const t = $('#chart-compare-title');
+  if (!t) return;
+  t.textContent = `${viewLabel()} — לאורך השנים (רק שנים עם ${f.minDeals}+ עסקאות בשימוש)`;
+  drawChart('chart-compare', 'line', levelData(list));
+}
+
+function renderCharts(list) {
+  const f = state.filters;
+  const M = METRICS[f.metric];
+  $('#chart-level-title').textContent = `${viewLabel()} (${M.unit})`;
+  $('#chart-index-title').textContent = `מדד: ${f.cmpFrom} = 100`;
+  drawChart('chart-level', 'line', levelData(list));
+  const years = chartYears(list);
+  const ok = list.filter((a) => !a.res.error);
+  drawChart('chart-index', 'line', {
     labels: years,
-    datasets: datasets((a) => new Map(analyse(a).points.map((p) => [p.yr, Math.round(p.m)]))),
+    datasets: ok.map((a) => lineDataset(a, years, new Map((analyse(a).index || []).map((p) => [p.yr, Math.round(p.v * 10) / 10])))),
   });
-  make('chart-index', 'line', {
+  drawChart('chart-deals', 'bar', {
     labels: years,
-    datasets: datasets((a) => new Map((analyse(a).index || []).map((p) => [p.yr, Math.round(p.v * 10) / 10]))),
-  });
-  make('chart-deals', 'bar', {
-    labels: years,
-    datasets: datasets((a) => new Map(a.res.years.map((r) => [Number(r.yr), Number(r.deals)]))),
-  });
+    datasets: ok.flatMap((a) => {
+      const rows = new Map(analyse(a).rows.map((r) => [r.yr, r]));
+      return [
+        { label: `${a.name} — בשימוש`, data: years.map((y) => rows.get(y)?.used ?? 0), backgroundColor: a.color, stack: a.id },
+        { label: `${a.name} — סוננו`, data: years.map((y) => (rows.get(y) ? rows.get(y).total - rows.get(y).used : 0)), backgroundColor: `${a.color}55`, stack: a.id },
+      ];
+    }),
+  }, { scales: { x: { stacked: true }, y: { stacked: true } } });
 }
 
 // ── raw material ───────────────────────────────────────────────────────────
 function csv(rows, cols) {
   const cell = (v) => {
-    const s = String(v ?? '');
+    let s = String(v ?? '');
+    if (typeof v === 'string' && /^[=+\-@]/.test(s)) s = `'${s}`; // no formulas in a spreadsheet
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
-  return '﻿' + [cols.join(','), ...rows.map((r) => cols.map((c) => cell(r[c])).join(','))].join('\n');
+  return '﻿' + [cols.map(([, h]) => h).join(','), ...rows.map((r) => cols.map(([k]) => cell(r[k])).join(','))].join('\n');
 }
 function download(name, text) {
   const url = URL.createObjectURL(new Blob([text], { type: 'text/csv;charset=utf-8' }));
@@ -631,84 +890,116 @@ function download(name, text) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-const RAW_COLS = [
-  ['settlement', 'יישוב'], ['gush', 'גוש'], ['chelka', 'חלקה'], ['sub_chelka', 'תת-חלקה'], ['deal_date', 'תאריך'],
-  ['deal_nature', 'מהות'], ['deal_amount', 'שווי מכירה'], ['declared_amount', 'שווי מוצהר'], ['portion', 'חלק נמכר'],
-  ['asset_area', 'שטח (מ"ר)'], ['room_num', 'חדרים'], ['year_built', 'שנת בנייה'], ['ppsqm_normalized', 'מחיר למ"ר מנורמל'],
+function dealRow(a, d) {
+  return {
+    date: ymd(d.date),
+    settlement: a.res.settlements[d.scode] ?? '',
+    gush: d.gush, chelka: d.chelka, sub: d.sub,
+    nbr: state.ext?.neighborhoodOf(d.gush) || '',
+    nature: d.nature, type: d.type,
+    amt: d.amt, decl: d.decl, sqm: d.sqm, por: d.por, rooms: d.rooms, yb: d.yb,
+    age: d.age ?? '', ageGroup: ageLabel(d.ageGroup), size: sizeLabel(d.size),
+    pp: d.pp == null ? '' : Math.round(d.pp),
+    status: d.drop ? DROP_LABEL[d.drop] : 'בשימוש',
+  };
+}
+const DEAL_COLS = [
+  ['date', 'תאריך'], ['settlement', 'יישוב'], ['gush', 'גוש'], ['chelka', 'חלקה'], ['sub', 'תת-חלקה'],
+  ['nbr', 'שכונה (טבלת עזר)'], ['nature', 'מהות'], ['type', 'סוג נכס'], ['amt', 'שווי עסקה'], ['decl', 'שווי מוצהר'],
+  ['sqm', 'שטח'], ['por', 'חלק נמכר'], ['rooms', 'חדרים'], ['yb', 'שנת בנייה'], ['age', 'גיל'], ['ageGroup', 'קבוצת גיל'],
+  ['size', 'קבוצת גודל'], ['pp', 'מחיר למ"ר מנורמל'], ['status', 'סטטוס בחישוב'],
 ];
-const YEAR_COLS = ['yr', 'deals', 'n_amt', 'med_amt', 'n_pp', 'med_pp'];
+const YEAR_COLS = [['yr', 'שנה'], ['total', 'עסקאות'], ['valid', 'עם נתונים מלאים וגודל'], ['used', 'בשימוש'],
+  ['mean', 'ממוצע'], ['median', 'חציון'], ['sd', 'סטיית תקן']];
 
 function renderRaw(list) {
   const pane = $('[data-pane=raw]');
-  if (!list.find((a) => a.id === state.rawAreaId)) state.rawAreaId = list[0].id;
+  if (!list.find((a) => a.id === state.rawAreaId)) { state.rawAreaId = list[0].id; state.rawPage = 0; }
   const a = getArea(state.rawAreaId);
   const f = state.filters;
+  const M = METRICS[f.metric];
   let html = `<div class="row" style="flex-wrap:wrap;margin-bottom:.6rem">${list.map((x) =>
     `<button type="button" data-area="${x.id}" class="${x.id === a.id ? 'primary' : ''}" style="width:auto;margin:0">${dot(x)}</button>`).join('')}</div>`;
   if (a.res.error) {
-    html += `<p class="neg">${esc(a.res.error)}</p>`;
-  } else {
-    const used = new Set(analyse(a).points.map((p) => p.yr));
-    html += `<h3>הסיכום השנתי — הקלט הישיר לנוסחאות</h3>
-      <p class="muted small">שורה אחת לכל שנה, כפי שהוחזרה מ-OVER. שורות באפור לא נכנסו לחישוב (פחות מ-${fmt(f.minDeals)} עסקאות במדד הנבחר).</p>
-      <div class="tbl-wrap"><table><thead><tr><th>שנה</th><th>עסקאות</th><th>עסקאות עם שווי</th><th>חציון שווי עסקה</th><th>עסקאות עם שטח וחלק נמכר</th><th>חציון מחיר למ"ר מנורמל</th><th>בשימוש</th></tr></thead><tbody>
-      ${a.res.years.map((r) => `<tr class="${used.has(Number(r.yr)) ? '' : 'thin'}">
-        <td class="n">${r.yr}${Number(r.yr) === THIS_YEAR ? ' (חלקית)' : ''}</td><td class="n">${fmt(r.deals)}</td><td class="n">${fmt(r.n_amt)}</td><td class="n">${fmt(r.med_amt)}</td>
-        <td class="n">${fmt(r.n_pp)}</td><td class="n">${fmt(r.med_pp)}</td><td>${used.has(Number(r.yr)) ? '✓' : '—'}</td></tr>`).join('')}
-      </tbody></table></div>
-      <p><button type="button" id="dl-years">הורד סיכום שנתי (CSV)</button></p>
-      <h3>העסקאות עצמן</h3>`;
-    const raw = a.res.raw;
-    if (!raw) {
-      html += `<p class="muted small">באזור ${fmt(a.res.deals_total)} עסקאות. OVER מחזיר עד ${fmt(over.SQL_ROW_CAP)} שורות לשאילתה, לכן הן נטענות בדפים.</p>
-        <button type="button" id="load-raw">${a.res.deals_total > over.SQL_ROW_CAP ? `טען את ${fmt(over.SQL_ROW_CAP)} העסקאות האחרונות` : `טען את ${fmt(a.res.deals_total)} העסקאות`}</button>`;
-    } else {
-      html += `<p class="muted small">נטענו ${fmt(raw.rows.length)} מתוך ${fmt(a.res.deals_total)} עסקאות, מהחדשה לישנה.</p>
-        <div class="row" style="margin-bottom:.5rem">
-          ${raw.rows.length < a.res.deals_total ? `<button type="button" id="load-raw">טען ${fmt(over.SQL_ROW_CAP)} נוספות</button>` : ''}
-          <button type="button" id="dl-raw">הורד את השורות שנטענו (CSV)</button>
-        </div>
-        <div class="tbl-wrap"><table><thead><tr>${RAW_COLS.map(([, h]) => `<th>${h}</th>`).join('')}</tr></thead><tbody>
-        ${raw.rows.map((r) => `<tr>${RAW_COLS.map(([k]) => `<td class="${/amount|area|ppsqm|portion/.test(k) ? 'n' : ''}">${esc(/amount|ppsqm/.test(k) ? fmt(r[k]) : r[k])}</td>`).join('')}</tr>`).join('')}
-        </tbody></table></div>`;
-    }
-    if (raw?.error) html += `<p class="neg">${esc(raw.error)}</p>`;
-    html += sqlBlock('השאילתה שהפיקה את הסיכום השנתי', a.res.sql);
-    html += sqlBlock('השאילתה שמחזירה את העסקאות', over.rawRowsSql(a.res.geometry, a.res.filters, 0));
+    pane.innerHTML = html + `<p class="neg">${esc(a.res.error)}</p>` + sqlBlock('השאילתה', a.res.sql);
+    bindRaw(pane, a);
+    return;
   }
+  const x = analyse(a);
+  const used = new Set(x.points.map((p) => p.yr));
+  html += `<h3>הסיכום השנתי — הקלט הישיר לנוסחאות</h3>
+    <p class="muted small">${esc(viewLabel())}. שורות באפור לא נכנסו לחישוב (פחות מ-${fmt(f.minDeals)} עסקאות בשימוש).</p>
+    <div class="tbl-wrap"><table><thead><tr><th>שנה</th><th>עסקאות</th><th>עם נתונים מלאים וגודל</th><th>בשימוש</th><th>סוננו</th>
+      <th>ממוצע</th><th>חציון</th><th>ס"ת</th><th>בשימוש לנוסחה</th></tr></thead><tbody>
+    ${x.rows.map((r) => `<tr class="${used.has(r.yr) ? '' : 'thin'}">
+      <td class="n">${r.yr}${r.yr === THIS_YEAR ? ' (חלקית)' : ''}</td><td class="n">${fmt(r.total)}</td><td class="n">${fmt(r.valid)}</td>
+      <td class="n">${fmt(r.used)}</td><td class="n">${share(r.total ? 1 - r.used / r.total : null)}</td>
+      <td class="n">${fmt(r.mean)}</td><td class="n">${fmt(r.median)}</td><td class="n">${fmt(r.sd)}</td>
+      <td>${used.has(r.yr) ? '✓' : '—'}</td></tr>`).join('')}
+    </tbody></table></div>
+    <p><button type="button" id="dl-years">הורד סיכום שנתי (CSV)</button></p>`;
+
+  // What the outlier filter did, cell by cell.
+  const rep = a.res.outlierReport || [];
+  const dropped = rep.reduce((s, c) => s + (c.n0 - c.kept), 0);
+  html += `<details><summary>סינון החריגים לפי תא (סוג נכס × גודל × שנה): ${fmt(dropped)} עסקאות סוננו ב-${fmt(rep.length)} תאים</summary>
+    <div class="tbl-wrap"><table><thead><tr><th>שנה</th><th>סוג נכס</th><th>קבוצת גודל</th><th>עסקאות בתא</th><th>קבוצת ייחוס (n)</th><th>סבבים על קבוצת הייחוס: e<sup>μ ± ${SIGMA_K}σ</sup> של ln המחיר → גבולות ₪/מ"ר (הוסרו מהייחוס)</th><th>סוננו מהתא</th><th>נשארו</th></tr></thead><tbody>
+    ${rep.map((c) => `<tr><td class="n">${c.yr}</td><td>${esc(c.type)}</td><td>${esc(sizeLabel(c.size))}</td><td class="n">${fmt(c.n0)}</td>
+      <td>${c.ref ? `${esc(c.ref)} (${fmt(c.refN)})` : '—'}</td>
+      <td class="n">${c.rounds.length ? c.rounds.map((r) => (r.mean != null
+        ? `${r.robust ? 'ניקוי גס: חציון' : 'μ'}=${r.mean.toFixed(3)}, ${r.robust ? 'σ חסין' : 'σ'}=${r.sd.toFixed(3)} → [${fmt(r.lo)}, ${fmt(r.hi)}] (${fmt(r.dropped)})`
+        : `[${fmt(r.lo)}, ${fmt(r.hi)}] (${fmt(r.dropped)})`)).join('<br>') : (f.outlier === 'sigma' ? `פחות מ-${SIGMA_MIN_N} עסקאות גם בקבוצה הרחבה — לא סונן` : '—')}</td>
+      <td class="n">${fmt(c.n0 - c.kept)}</td><td class="n">${fmt(c.kept)}</td></tr>`).join('')}
+    </tbody></table></div></details>`;
+
+  // Settlements the deals belong to, with the CBS attributes from the external table.
+  const counts = new Map();
+  for (const d of a.res.deals) counts.set(d.scode, (counts.get(d.scode) || 0) + 1);
+  html += `<details><summary>יישובים באזור (${fmt(counts.size)})</summary><div class="tbl-wrap"><table><thead><tr>
+    <th>יישוב</th><th>סמל</th><th>עסקאות</th><th>מחוז</th><th>נפה</th><th>אזור טבעי</th><th>מטרופולין</th><th>צורת יישוב</th><th>אשכול רשויות</th></tr></thead><tbody>
+    ${[...counts.entries()].sort((p, q2) => q2[1] - p[1]).map(([code, n]) => {
+      const info = state.ext?.settlementInfo.get(Number(code)) || {};
+      return `<tr><td>${esc(a.res.settlements[code] ?? (code == null ? 'ללא סמל יישוב במקור' : ''))}</td><td class="n">${esc(code ?? '')}</td><td class="n">${fmt(n)}</td>
+        <td>${esc(info.district ?? '')}</td><td>${esc(info.subdistrict ?? '')}</td><td>${esc(info.natural_region ?? '')}</td>
+        <td>${esc(info.metropolin ?? '')}</td><td>${esc(info.settlement_type ?? '')}</td><td>${esc(info.authority_cluster ?? '')}</td></tr>`;
+    }).join('')}</tbody></table></div>
+    <p class="muted small">מאפייני היישוב: טבלת עזר חיצונית (למ"ס, מקובץ המשתמש). יישוב שאינו תואם את מיקום האזור מעיד בדרך כלל על שגיאת רישום במקור.</p></details>`;
+
+  // The deals themselves.
+  const deals = a.res.deals;
+  const pages = Math.max(1, Math.ceil(deals.length / PAGE));
+  state.rawPage = Math.min(state.rawPage, pages - 1);
+  const slice = deals.slice(state.rawPage * PAGE, (state.rawPage + 1) * PAGE);
+  html += `<h3>העסקאות עצמן</h3>
+    <p class="muted small">כל ${fmt(deals.length)} העסקאות שנשלפו, מהחדשה לישנה, עם העמודות המחושבות. "${esc(M.label)}" מחושב רק מהעסקאות בסטטוס "בשימוש".</p>
+    <div class="row" style="margin-bottom:.5rem;flex-wrap:wrap;align-items:center">
+      <button type="button" id="dl-raw">הורד את כל העסקאות (CSV)</button>
+      <button type="button" data-page="-1" ${state.rawPage === 0 ? 'disabled' : ''}>הקודם</button>
+      <span class="small">עמוד ${fmt(state.rawPage + 1)} מתוך ${fmt(pages)}</span>
+      <button type="button" data-page="1" ${state.rawPage >= pages - 1 ? 'disabled' : ''}>הבא</button>
+    </div>
+    <div class="tbl-wrap"><table><thead><tr>${DEAL_COLS.map(([, h]) => `<th>${h}</th>`).join('')}</tr></thead><tbody>
+    ${slice.map((d) => {
+      const r = dealRow(a, d);
+      return `<tr class="${d.drop ? 'thin' : ''}">${DEAL_COLS.map(([k]) => `<td class="${/amt|decl|sqm|por|pp|rooms|yb|age$|gush|chelka|sub/.test(k) ? 'n' : ''}">${esc(/amt|decl|pp/.test(k) ? fmt(r[k]) : r[k])}</td>`).join('')}</tr>`;
+    }).join('')}
+    </tbody></table></div>`;
+  html += sqlBlock('השאילתה שמחזירה את העסקאות, החלקות ומשקי הבית', a.res.sql);
   pane.innerHTML = html;
-  $$('[data-area]', pane).forEach((b) => { b.onclick = () => { state.rawAreaId = b.dataset.area; renderRaw(computed()); }; });
-  const dlYears = $('#dl-years', pane);
-  if (dlYears) dlYears.onclick = () => download(`${a.name}-years.csv`, csv(a.res.years, YEAR_COLS));
-  const loadBtn = $('#load-raw', pane);
-  if (loadBtn) {
-    loadBtn.disabled = !!a.res.rawLoading;
-    loadBtn.onclick = () => loadRaw(a, loadBtn);
-  }
-  const dlRaw = $('#dl-raw', pane);
-  if (dlRaw) dlRaw.onclick = () => download(`${a.name}-deals.csv`, csv(a.res.raw.rows, RAW_COLS.map(([k]) => k)));
+  bindRaw(pane, a, x);
 }
 
-async function loadRaw(a, btn) {
-  const res = a.res;
-  if (res.rawLoading) return; // a re-render may have shown an enabled button again
-  res.rawLoading = true;
-  btn.disabled = true;
-  btn.textContent = 'טוען…';
-  const raw = res.raw || { rows: [] };
-  try {
-    const r = await over.runSql(over.rawRowsSql(res.geometry, res.filters, raw.rows.length));
-    raw.rows.push(...r.rows);
-    raw.error = null;
-  } catch (e) {
-    raw.error = e.message;
-  }
-  res.rawLoading = false;
-  if (a.res === res) res.raw = raw; // ignore if the area was recomputed meanwhile
-  renderRaw(computed());
+function bindRaw(pane, a, x) {
+  $$('[data-area]', pane).forEach((b) => { b.onclick = () => { state.rawAreaId = b.dataset.area; state.rawPage = 0; renderRaw(computed()); }; });
+  $$('[data-page]', pane).forEach((b) => { b.onclick = () => { state.rawPage += Number(b.dataset.page); renderRaw(computed()); }; });
+  const dlYears = $('#dl-years', pane);
+  if (dlYears && x) dlYears.onclick = () => download(`${a.name}-years.csv`, csv(x.rows, YEAR_COLS));
+  const dlRaw = $('#dl-raw', pane);
+  if (dlRaw) dlRaw.onclick = () => download(`${a.name}-deals.csv`, csv(a.res.deals.map((d) => dealRow(a, d)), DEAL_COLS));
 }
 
 function sqlBlock(title, sql) {
+  if (!sql) return '';
   const url = over.consoleUrl(sql);
   const link = url
     ? `<a href="${esc(url)}" target="_blank" rel="noopener">פתח בקונסולת ה-SQL של OVER</a> <span class="muted">(ההרצה שם דורשת התחברות)</span>`
@@ -722,45 +1013,63 @@ function sqlBlock(title, sql) {
 function renderMethod(list) {
   const f = state.filters;
   const M = METRICS[f.metric];
+  const q = queried(list);
+  const src = state.ext?.source;
   let html = `
-  <h3>1. מאזור מצויר לעסקאות</h3>
-  <p>משיכת מברשת היא קו שמורחב לשני צדדיו בחצי מעובי המברשת (buffer), והאזור הוא איחוד כל המשיכות (פחות משיכות המחק).
-  המאגר של רשות המסים אינו כולל קואורדינטות — רק גוש וחלקה. לכן האזור מתורגם לחלקות: נכללת כל חלקה ש<b>נקודה פנימית שלה</b> (ST_PointOnSurface)
-  נמצאת בתוך האזור, כדי שחלקה גדולה שהמברשת רק נגעה בשוליה לא תכניס את העסקאות שלה. העסקאות מחוברות לחלקות לפי גוש + חלקה.</p>
-  <p>סינון: מהות העסקה (${esc(queried(list).natures.join(', ') || 'ללא סינון')}), שנים ${yr(queried(list).yearMin)}–${yr(queried(list).yearMax)} לפי תאריך העסקה.</p>
+  <h3>1. מאזור לעסקאות</h3>
+  <p>אזור הוא ציור במברשת (קו שמורחב לשני צדדיו בחצי מעובי המברשת, איחוד המשיכות פחות משיכות המחק), או שכונה / אזור סטטיסטי שנבחרו בלחיצה על המפה.
+  המאגר של רשות המסים אינו כולל קואורדינטות — רק גוש וחלקה — ולכן נכללת כל חלקה ש<b>נקודה פנימית שלה</b> (ST_PointOnSurface) בתוך האזור, והעסקאות מחוברות לחלקות לפי גוש + חלקה.
+  נשלפים סוגי הנכס ${esc((q.types || []).join(', '))} והשנים ${yr(q.yearMin)}–${yr(q.yearMax)}; כל השאר מחושב בדפדפן מהעסקאות עצמן.</p>
 
-  <h3>2. המדד</h3>
-  <p>המחיר למ"ר <b>מנורמל</b>: השטח במאגר הוא שטח הנכס כולו, והשווי משולם רק על החלק שנמכר, ולכן:</p>
+  <h3>2. סיווג הנכס</h3>
+  <p>כל מהות עסקה של רשות המסים ממופה לסוג נכס (קטגוריות מפ"י) לפי טבלת עזר חיצונית${src ? ` — "${esc(src.title)}"` : ''}. מהויות שאינן בטבלה מסווגות "${UNMAPPED}". "לא רלבנטי" ו"סחר נדל"ן" אינם בניתוח המגורים כברירת מחדל. הרשימה המלאה בפאנל הסינון.</p>
+
+  <h3>3. עסקה שמספיקה לחישוב, והמחיר למ"ר</h3>
+  <span class="formula">valid ⇔ deal_amount ≥ ${MIN_AMOUNT} ∧ asset_area &gt; 0 ∧ portion &gt; 0</span>
   <span class="formula">P = deal_amount / (asset_area × portion)</span>
-  <p>עסקה בלי שטח, בלי חלק נמכר (0) או בלי שווי לא נכנסת למדד הזה (אך נספרת בסך העסקאות). לכל שנה t מחושב <b>החציון</b>:</p>
-  <span class="formula">M<sub>t</sub> = median{ P<sub>i</sub> : year(i) = t }</span>
-  <p>חציון ולא ממוצע: שורה אחת במאגר יכולה להיות דירה אחת או בניין שלם, ושורה כזו מזיזה ממוצע במיליונים.
-  המדד החלופי, "חציון שווי עסקה", הוא חציון deal_amount בלי חלוקה בשטח.</p>
+  <p>השטח במאגר הוא שטח הנכס כולו והשווי משולם רק על החלק שנמכר, ולכן החלוקה בחלק הנמכר. בקובץ של משתמש האתר המחיר מחושב מהשווי המוצהר כשהוא שווה לשווי העסקה, ומשווי העסקה אחרת — כלומר תמיד משווי העסקה, בדיוק כמו כאן.</p>
 
-  <h3>3. שנים דלות</h3>
-  <p>שנה נכנסת לחישוב רק אם יש מאחורי החציון שלה לפחות ${fmt(f.minDeals)} עסקאות (n<sub>t</sub> ≥ ${fmt(f.minDeals)}). חציון של עסקאות בודדות זז בעשרות אחוזים מרעש בלבד.</p>
+  <h3>4. קבוצות גודל</h3>
+  <p>${SIZE_GROUPS.map((g) => `${esc(g.label)}: <span class="num">${g.lo} ≤ שטח &lt; ${g.hi === Infinity ? '∞' : g.hi}</span>`).join(' · ')}.
+  הגבולות משחזרים את מה שה-VLOOKUP בקובץ העזר עושה בפועל (התוויות שם, "1-54", "54-80"…, רחוקות ביחידה מהגבולות האמיתיים). "ללא גודל" לא נכנס לחישוב מחיר, כי אין לו שטח שאפשר לחלק בו.</p>
 
-  <h3>4. שינוי בין שתי שנים</h3>
-  <span class="formula">Δ% = (M<sub>B</sub> / M<sub>A</sub> − 1) × 100</span>
-  <span class="formula">CAGR = ((M<sub>B</sub> / M<sub>A</sub>)<sup>1/(B−A)</sup> − 1) × 100</span>
-  <p>A = שנת הבסיס (${yr(f.cmpFrom)}), B = שנת ההשוואה (${yr(f.cmpTo)}). CAGR הוא השינוי השנתי הקבוע שהיה מביא מ-M<sub>A</sub> ל-M<sub>B</sub>.</p>
+  <h3>5. סינון חריגים — ${esc(OUTLIER_METHODS[f.outlier].label)}</h3>
+  <p>הסינון נעשה בתוך כל <b>תא</b> — אזור × סוג נכס × קבוצת גודל × שנה — ולא על כל המאגר: מחיר רגיל לעיר יכול להיות חריג לרחוב, וחנות אינה חריגה של דירות. השטח מעוגל למ"ר שלם לפני השיוך לקבוצת גודל.</p>
+  <span class="formula">round r: μ<sub>r</sub> = mean(ln P), σ<sub>r</sub> = sd(ln P) over the kept deals;  drop P ∉ [e<sup>μ<sub>r</sub> − ${SIGMA_K}σ<sub>r</sub></sup>, e<sup>μ<sub>r</sub> + ${SIGMA_K}σ<sub>r</sub></sup>]</span>
+  <p><b>ניקוי גס לפני הסבבים:</b> חציון ± ${PRESCREEN_K} סטיות תקן חסינות (1.4826 × MAD) של ln המחיר. בתא מלוכלך מאוד (הרבה עסקאות בחלק נמכר זעיר) גם סטיית התקן של ln המחיר מתנפחת, והחריגים מסתירים זה את זה; החציון וה-MAD לא מושפעים מהם. בנתונים נקיים השלב הזה כמעט לא מסיר דבר, ואחריו רצים שני הסבבים של 2 סטיות תקן כפי שביקש משתמש האתר.</p>
+  <p><b>למה על ln המחיר:</b> מחירים מתפלגים בקירוב לוג-נורמלית. בסולם רגיל, כמה עסקאות עם חלק נמכר זעיר (מחיר מנורמל של מיליון ₪ למ"ר) מנפחות יחד את סטיית התקן ו"מסתירות" זו את זו — בדיקה על הצפון הישן ב-2016 השאירה כך ממוצע של 55,714 מול חציון של 48,033. בסולם לוגריתמי הן רחוקות כ-10 סטיות תקן ונתפסות כבר בסבב הראשון, והזנב הימני הטבעי של נכסי פרימיום נחתך פחות.
+  שני סבבים (הסבב השני מחושב מחדש על מה שנשאר). סטיית התקן היא של מדגם (חלוקה ב-n−1).
+  <b>תא קטן:</b> במדגם של n עסקאות ציון התקן הגבוה ביותר האפשרי הוא (n−1)/√n, פחות מ-2 כש-n ≤ 5 — כלל של 2 סטיות תקן לא יכול לתפוס שום חריג בתא כזה. לכן הגבולות מחושבים על <b>קבוצת ייחוס</b> של לפחות ${SIGMA_REF_N} עסקאות, שמתרחבת בהדרגה מהתא עצמו: ${REFERENCE_STEPS.map((r) => esc(r.label)).join(' ← ')}, ומוחלים על עסקאות התא. אם גם הקבוצה הרחבה ביותר קטנה מ-${SIGMA_MIN_N}, התא אינו מסונן. קבוצת הייחוס של כל תא מוצגת בלשונית "חומר גלם".
+  החלופה: טווח קבוע <span class="num">${fmt(FIXED_RANGE[0])}–${fmt(FIXED_RANGE[1])}</span> ₪ למ"ר, כמו בקובץ של משתמש האתר. שימו לב: סינון לפי סטיות תקן מניח התפלגות קרובה לנורמלית ועלול לקצץ זנב ימני אמיתי (נכסי פרימיום); מה שסונן בכל תא מוצג בלשונית "חומר גלם".</p>
 
-  <h3>5. שינוי המגמה — רגרסיה לוגריתמית משוקללת</h3>
-  <p>שתי נקודות רגישות לשנה חריגה בכל אחד מהקצוות. לכן מחושב גם קו מגמה על <b>כל</b> השנים הכשירות בין A ל-B:
-  רגרסיה של ln(M<sub>t</sub>) על השנה, במשקל מספר העסקאות n<sub>t</sub>, כך ששנה דלה מושכת את הקו פחות משנה עם אלפי עסקאות.</p>
-  <span class="formula">t̄ = Σ n<sub>t</sub>·t / Σ n<sub>t</sub> ,  ȳ = Σ n<sub>t</sub>·ln M<sub>t</sub> / Σ n<sub>t</sub></span>
-  <span class="formula">b = Σ n<sub>t</sub>(t − t̄)(ln M<sub>t</sub> − ȳ) / Σ n<sub>t</sub>(t − t̄)²</span>
-  <span class="formula">T = (e<sup>b</sup> − 1) × 100</span>
+  <h3>6. הסטטיסטיקה השנתית</h3>
+  <span class="formula">mean<sub>t</sub> = Σ P<sub>i</sub> / n<sub>t</sub> ,  median<sub>t</sub> ,  sd<sub>t</sub> = √(Σ(P<sub>i</sub> − mean<sub>t</sub>)² / (n<sub>t</sub> − 1))</span>
+  <p>מעל העסקאות שבשימוש בשנה t. גם המדדים של <b>שווי עסקה</b> מחושבים על אותן עסקאות (אחרי סינון החריגים לפי המחיר למ"ר, ורק עם שטח וחלק נמכר), והשווי הוא של החלק שנמכר — מכירת חצי דירה נספרת בחצי מחירה. המדד הנוכחי: <b>${esc(M.label)}</b>. הממוצע ברירת המחדל רק משום שקודם מופרדים הגדלים ומסוננים החריגים; החציון מוצג לצדו, ופער גדול ביניהם מעיד על חריגים שנשארו. שנה נכנסת לנוסחאות רק אם n<sub>t</sub> ≥ ${fmt(f.minDeals)}.</p>
+
+  <h3>7. גיל הבניין</h3>
+  <span class="formula">age = deal_year − year_built ,  valid ⇔ ${MIN_YEAR_BUILT} ≤ year_built ≤ deal_year + ${MAX_YEARS_AHEAD}</span>
+  <p>מכירה "על הנייר" (שנת בנייה אחרי שנת העסקה) נחשבת גיל 0. שנת בנייה 0, 1 או רחוקה בעתיד = "גיל לא ידוע", ואינה נכנסת לחישוב הגיל. קבוצות: ${AGE_GROUPS.map((g) => esc(g.label)).join(' · ')}. בשלב זה הגיל הוא פילוח ולא משתנה ברגרסיה — פילוח שקוף קל יותר לבדוק מול הנתונים.</p>
+
+  <h3>8. שינוי בין שתי שנים</h3>
+  <span class="formula">Δ% = (M<sub>B</sub> / M<sub>A</sub> − 1) × 100 ,  CAGR = ((M<sub>B</sub> / M<sub>A</sub>)<sup>1/(B−A)</sup> − 1) × 100</span>
+
+  <h3>9. מגמה — רגרסיה לוגריתמית משוקללת</h3>
+  <span class="formula">b = Σ n<sub>t</sub>(t − t̄)(ln M<sub>t</sub> − ȳ) / Σ n<sub>t</sub>(t − t̄)² ,  T = (e<sup>b</sup> − 1) × 100</span>
   <span class="formula">R² = 1 − Σ n<sub>t</sub>(ln M<sub>t</sub> − a − b·t)² / Σ n<sub>t</sub>(ln M<sub>t</sub> − ȳ)² ,  a = ȳ − b·t̄</span>
-  <p>T היא המגמה השנתית באחוזים. R² קרוב ל-1: המחירים נעו בקצב קבוע למדי; קרוב ל-0: קו ישר לא מתאר את התנועה, והמגמה פחות משמעותית. נדרשות לפחות 3 שנים כשירות.</p>
+  <p>על השנים הכשירות בין A ל-B, במשקל מספר העסקאות. בלשונית "השוואה" — על קבוצת הגודל שנבחרה בצד (ברירת המחדל: כל הגדלים יחד); בלשונית "פילוח" — בנפרד לכל קבוצת גודל ולכל קבוצת גיל.</p>
 
-  <h3>6. השוואה בין אזורים</h3>
-  <span class="formula">L = 100 × M<sub>B</sub>(area) / M<sub>B</sub>(ref)</span>
-  <span class="formula">G = T(area) − T(ref)</span>
-  <span class="formula">I<sub>t</sub> = 100 × M<sub>t</sub> / M<sub>A</sub></span>
-  <p>L — רמת המחיר של האזור ביחס לאזור הייחוס בשנת ההשוואה (100 = זהה). G — פער המגמה בנקודות אחוז (נ"א). I — המדד (הגרף השני), שמציב את כל האזורים על אותו ציר למרות רמות מחיר שונות: כל אזור מתחיל ב-100 בשנת הבסיס.</p>
+  <h3>10. השוואה בין אזורים</h3>
+  <span class="formula">L = 100 × M<sub>B</sub>(area) / M<sub>B</sub>(ref) ,  G = T(area) − T(ref) ,  I<sub>t</sub> = 100 × M<sub>t</sub> / M<sub>A</sub></span>
 
-  <h3>הצבה — המספרים של כל אזור (${esc(M.label)})</h3>`;
+  <h3>11. איכות הנתונים</h3>
+  <span class="formula">share used = |{ valid ∧ size ≠ none ∧ not outlier }| / |{ fetched }|</span>
+  <p>לכל אזור ושנה מוצגים: כל העסקאות, אלה עם נתונים מלאים וגודל, ואלה שנשארו אחרי הסינון. אזור שפחות מ-${share(LOW_QUALITY)} מהעסקאות שלו בשימוש מסומן ⚠ ובקו מקווקו על המפה.</p>
+
+  <h3>12. תחלופה ביחס למשקי הבית</h3>
+  <span class="formula">turnover = (deals in A..B′ / (B′ − A + 1)) / H × 1000 ,  H = Σ<sub>s</sub> hh<sub>s</sub> × area(s ∩ area) / area(s)</span>
+  <p>החלון: השנים המלאות מ-A עד B שנשלפו בפועל (B′ ≤ ${THIS_YEAR - 1}). נספרות כל העסקאות של סוגי הנכס שנבחרו, בלי סינון גודל או גיל, כי גם מספר משקי הבית אינו מפולח לפיהם. hh<sub>s</sub> = משקי הבית באזור הסטטיסטי s במפקד 2022 (שכבת הלמ"ס ב-OVER), מחולקים לפי החלק מהשטח שבתוך האזור. זה <b>קירוב</b>: משקי בית ≈ דירות מאוכלסות, בלי דירות ריקות, ואזורים סטטיסטיים קטנים לא מפרסמים מספר (אז הם נספרים כאפס). OVER אינו מחזיק במלאי יחידות הדיור; כלי ה-ArcGIS של מפ"י שצורף לפידבק אינו נגיש כמקור נתונים.</p>
+
+  <h3>הצבה — המספרים של כל אזור (${esc(viewLabel())})</h3>`;
 
   const ref = reference(list);
   const refA = ref ? analyse(ref) : null;
@@ -791,15 +1100,23 @@ function renderMethod(list) {
     } else {
       html += `<p class="muted">לא ניתן לחשב מגמה: פחות מ-3 שנים כשירות בין ${yr(f.cmpFrom)} ל-${yr(f.cmpTo)}.</p>`;
     }
+    const turn = turnoverOf(a, queried(list));
+    if (turn) {
+      html += `<span class="formula">turnover = (${fmt(turn.deals)} / ${turn.years}) / ${fmt(a.res.households)} × 1000 = ${turn.per1000.toFixed(2)}</span>
+        <p class="muted small">${fmt(a.res.stat_areas)} אזורים סטטיסטיים חותכים את האזור${a.res.stat_areas_no_hh ? `; ל-${fmt(a.res.stat_areas_no_hh)} מהם אין מספר משקי בית במפקד` : ''}.</p>`;
+    }
     html += '</div>';
   }
 
-  html += `<h3 style="margin-top:1.2rem">הסתייגויות</h3><ul class="small">
-    <li>המקור הוא שורות רשות המסים כפי שפורסמו ב-<a href="https://www.over.org.il/projects/deals" target="_blank" rel="noopener">גרסאות לעם</a>: הן לא עובדו, לא תוקנו ולא הושלמו.${state.register ? ` המאגר כולל ${fmt(state.register.deals)} עסקאות, ${esc(state.register.first_deal)} עד ${esc(state.register.last_deal)}.` : ''}</li>
+  html += `<h3 style="margin-top:1.2rem">מקורות</h3><ul class="small">
+    <li><b>OVER (גרסאות לעם)</b> — מאגר העסקאות של רשות המסים${state.register ? ` (${fmt(state.register.deals)} עסקאות, <span class="num">${esc(state.register.first_deal)}</span> עד <span class="num">${esc(state.register.last_deal)}</span>)` : ''}, שכבת החלקות, שכבת השכונות של מפ"י, והאזורים הסטטיסטיים 2022 עם נתוני מפקד 2022 של הלמ"ס. שורות המקור לא עובדו, לא תוקנו ולא הושלמו.</li>
+    ${src ? `<li><b>מקור חוץ: ${esc(src.title)}</b> (התקבל ${esc(src.received)}) — ${esc(src.note)} בשימוש: סיווג מהות לסוג נכס, מיפוי גוש לשכונה (עמודה בחומר הגלם), מאפייני יישובים של הלמ"ס. <a href="https://github.com/zomer-g/nadlan-area-compare/tree/master/data/external" target="_blank" rel="noopener">הטבלאות והבדיקה שלהן</a>.</li>` : ''}
+  </ul>
+  <h3>הסתייגויות</h3><ul class="small">
     <li>המאגר אינו מפרסם תת-גוש. חלקות שחולקות מספר גוש+חלקה עם תת-גוש שונה עלולות לקבל את אותן עסקאות.</li>
-    <li>שטח הנכס הוא שטח הנכס כולו; חלק נמכר קטן מאוד (למשל 0.001) מעוגל לשלוש ספרות, ולכן המחיר המנורמל שלו לא מדויק.</li>
-    <li>חציון של שנה משקף גם את <b>תמהיל</b> הנכסים שנמכרו באותה שנה (גודל, גיל, מיקום בתוך האזור), לא רק שינוי מחיר של אותם נכסים.</li>
-    <li>אזורים חופפים חולקים עסקאות; אזור בתוך אזור משווה חלק לשלם, לא שתי קבוצות זרות.</li>
+    <li>חלק נמכר קטן מאוד (למשל 0.001) מעוגל לשלוש ספרות, ולכן המחיר המנורמל שלו לא מדויק — סינון החריגים תופס את רובם.</li>
+    <li>גם בתוך קבוצת גודל, ממוצע שנתי משקף את תמהיל הנכסים שנמכרו באותה שנה (גיל, מיקום בתוך האזור), לא רק שינוי מחיר של אותם נכסים.</li>
+    <li>מיפוי גוש לשכונה בטבלת העזר הוא קירוב: גוש אינו תמיד חופף לשכונה, ושלושה גושים בה משויכים לשתי שכונות. לבחירת שכונה כאזור משמשת שכבת השכונות של מפ"י (חיבור מרחבי), לא הטבלה.</li>
   </ul>`;
   $('[data-pane=method]').innerHTML = html;
 }
@@ -817,9 +1134,10 @@ over.registerStats().then((s) => {
     ${/^https?:\/\//.test(s.source_url || '') ? `<a href="${esc(s.source_url)}" target="_blank" rel="noopener">מקור: רשות המסים</a>` : ''}`;
 }).catch((e) => { $('#register').textContent = 'OVER לא זמין: ' + e.message; });
 
-over.natures().then((list) => {
+Promise.all([over.natures(), loadExternal()]).then(([list, ext]) => {
   state.natureList = list;
-  renderNatures();
+  state.ext = ext;
+  renderTypes();
 }).catch((e) => {
-  $('#natures').innerHTML = `<p class="neg small">טעינת סוגי העסקאות נכשלה: ${esc(e.message)}</p>`;
+  $('#types').innerHTML = `<p class="neg small">טעינת סוגי העסקאות נכשלה: ${esc(e.message)}</p>`;
 });
