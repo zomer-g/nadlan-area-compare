@@ -5,8 +5,8 @@
 // endpoint, and not refetched while the view stays inside what was loaded —
 // the same pattern, and the same 30-requests-a-minute budget, as the parcels.
 
-import { tableFeatures } from './over.js?v=5dbd4d41de';
-import { esc } from './util.js?v=5dbd4d41de';
+import { tableFeatures } from './over.js?v=a8360f29a3';
+import { esc } from './util.js?v=a8360f29a3';
 
 export const OUTLINES = {
   neighborhood: {
@@ -22,7 +22,7 @@ export const OUTLINES = {
     label: 'אזורים סטטיסטיים 2022 (למ"ס)',
     table: 'append_cbs_pub_file_7a4d3897_38170565',
     columns: 'STAT_2022,SHEM_YISHUV_HEB',
-    minZoom: 13,
+    minZoom: 14, // OVER serves full-resolution polygons: at 13 a city is ~10 MB
     name: (p) => `א"ס ${String(p.STAT_2022 || '').replace(/\.0$/, '')} · ${p.SHEM_YISHUV_HEB || ''}`,
     color: '#7c3aed',
     source: 'שכבת האזורים הסטטיסטיים 2022 של הלמ"ס (דרך OVER)',
@@ -222,7 +222,7 @@ export function createOverlays(map, { onPick, onStatus }) {
       const vl = viewportLayer(map, {
         table: t.table,
         columns: t.columns,
-        minZoom: 12,
+        minZoom: 13,
         pane: 'themes',
         onStatus: (m) => onStatus(`${t.label}: ${m}`),
         style: (f) => ({ color: '#555', weight: 0.4, fillColor: colorOf(valueOf(f.properties)), fillOpacity: 0.55 }),

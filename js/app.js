@@ -1,14 +1,14 @@
-import * as over from './over.js?v=5dbd4d41de';
-import { METRICS, eligible, pointChange, logTrend, indexTo, within } from './stats.js?v=5dbd4d41de';
+import * as over from './over.js?v=a8360f29a3';
+import { METRICS, eligible, pointChange, logTrend, indexTo, within } from './stats.js?v=a8360f29a3';
 import {
   SIZE_GROUPS, AGE_GROUPS, OUTLIER_METHODS, SIGMA_K, SIGMA_ROUNDS, SIGMA_MIN_N, PRESCREEN_K, SIGMA_REF_N, REFERENCE_STEPS, FIXED_RANGE, MIN_AMOUNT,
   MIN_YEAR_BUILT, MAX_YEARS_AHEAD, enrich, markOutliers, select, yearly, turnover,
-} from './analysis.js?v=5dbd4d41de';
-import { loadExternal } from './external.js?v=5dbd4d41de';
-import { createBrush } from './brush.js?v=5dbd4d41de';
-import { createParcelLayer } from './parcels.js?v=5dbd4d41de';
-import { createOverlays, OUTLINES, THEMES } from './layers.js?v=5dbd4d41de';
-import { esc } from './util.js?v=5dbd4d41de';
+} from './analysis.js?v=a8360f29a3';
+import { loadExternal } from './external.js?v=a8360f29a3';
+import { createBrush } from './brush.js?v=a8360f29a3';
+import { createParcelLayer } from './parcels.js?v=a8360f29a3';
+import { createOverlays, OUTLINES, THEMES } from './layers.js?v=a8360f29a3';
+import { esc } from './util.js?v=a8360f29a3';
 
 const COLORS = ['#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c', '#0891b2', '#ca8a04', '#db2777'];
 const STORE_KEY = 'nadlan-area-compare:v2';
@@ -67,7 +67,7 @@ const charts = {};
 function save() {
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify({
-      areas: state.areas.map(({ id, name, color, geom, origin }) => ({ id, name, color, geom, origin })),
+      areas: state.areas.map(({ id, name, color, geom, origin, picks }) => ({ id, name, color, geom, origin, picks })),
       activeId: state.activeId,
       refId: state.refId,
       filters: state.filters,
@@ -95,7 +95,8 @@ function load() {
           name: typeof a?.name === 'string' ? a.name.slice(0, 60) : undefined,
           color: /^#[0-9a-f]{6}$/i.test(a?.color) ? a.color : undefined,
           geom: okGeom ? a.geom : null,
-          origin: typeof a?.origin === 'string' ? a.origin.slice(0, 120) : null,
+          origin: typeof a?.origin === 'string' ? a.origin.slice(0, 300) : null,
+          picks: Array.isArray(a?.picks) ? a.picks.filter((n) => typeof n === 'string').map((n) => n.slice(0, 80)).slice(0, 200) : [],
         }, false);
       } catch { /* one bad area must not lose the others */ }
     }
@@ -173,6 +174,7 @@ function addArea(init = {}, activate = true) {
     color: init.color || COLORS.find((c) => !used.has(c)) || COLORS[n % COLORS.length],
     geom: init.geom || null,
     origin: init.origin || null, // where a picked shape came from; null when drawn
+    picks: init.picks || [], // names of the neighbourhoods / statistical areas it is made of
     res: null,
     layer: null,
   };
@@ -265,7 +267,7 @@ function renderAreas() {
         <button type="button" data-act="clear" title="נקה את הסימון">↺</button>
         <button type="button" data-act="del" title="מחק אזור">✖</button>
       </span>
-      <span class="meta">${esc(meta)}${a.origin ? `<br>${esc(a.origin)}` : ''}</span>`;
+      <span class="meta">${esc(meta)}${a.picks?.length > 1 ? `<br>${a.picks.length} פוליגונים: ${esc(a.picks.join(' · '))}` : ''}${a.origin ? `<br>${esc(a.origin)}` : ''}</span>`;
     $('.swatch', li).onclick = () => { state.activeId = a.id; save(); renderAreas(); };
     const input = $('input', li);
     input.onfocus = () => {
@@ -276,7 +278,7 @@ function renderAreas() {
     };
     input.onchange = () => { a.name = input.value.trim() || a.name; save(); renderResults(); };
     $('[data-act=zoom]', li).onclick = () => { if (a.geom) map.fitBounds(a.layer.getBounds(), { padding: [30, 30] }); };
-    $('[data-act=clear]', li).onclick = () => { a.geom = null; a.origin = null; geometryChanged(a); };
+    $('[data-act=clear]', li).onclick = () => { a.geom = null; a.origin = null; a.picks = []; geometryChanged(a); };
     $('[data-act=del]', li).onclick = () => removeArea(a.id);
     ul.appendChild(li);
   }
@@ -301,22 +303,64 @@ function setMode(m) {
   syncOutlineBoxes();
 }
 
-// A polygon clicked in pick mode becomes a new area (once).
+// A polygon clicked in pick mode either joins the active area (default), so
+// several neighbourhoods or statistical areas are analysed as one, or becomes
+// a new area of its own. Clicking a polygon the active area already holds
+// takes it out again.
+function pickTarget() {
+  return $('input[name=pick-target]:checked')?.value === 'new' ? 'new' : 'active';
+}
+
+function pickedName(picks) {
+  const full = picks.join(' + ');
+  return full.length <= 60 ? full : `${picks[0]} ועוד ${picks.length - 1}`;
+}
+
 function addPicked(kind, name, geometry, source) {
-  const L0 = OUTLINES[kind];
-  const dup = state.areas.find((a) => a.name === name && a.origin?.startsWith(over.PICK_LAYERS[kind].label));
-  if (dup) {
-    state.activeId = dup.id;
+  const label = over.PICK_LAYERS[kind].label;
+  const poly = turf.truncate(turf.simplify(turf.feature(geometry), { tolerance: 0.00002, highQuality: true }), { precision: 6 });
+  const originOf = (a) => [...new Set([...(a.origin ? [a.origin] : []), `${label} — ${source}`])].join(' · ').slice(0, 300);
+
+  if (pickTarget() === 'new') {
+    const dup = state.areas.find((a) => a.picks?.length === 1 && a.picks[0] === name);
+    if (dup) {
+      state.activeId = dup.id;
+      renderAreas();
+      setStatus(`"${name}" כבר ברשימת האזורים.`);
+      return;
+    }
+    const a = addArea({ name, geom: poly, picks: [name] });
+    a.origin = originOf(a);
+    save();
     renderAreas();
-    setStatus(`"${name}" כבר ברשימת האזורים.`);
+    setStatus(`נוסף אזור חדש: ${name} — לחצו "חשב והשווה" כשתסיימו לבחור.`);
     return;
   }
-  const simple = turf.truncate(turf.simplify(turf.feature(geometry), { tolerance: 0.00002, highQuality: true }), { precision: 6 });
-  addArea({ name, geom: simple, origin: `${over.PICK_LAYERS[kind].label} — ${source}` });
-  save();
-  renderAreas();
-  markStale();
-  setStatus(`נוסף: ${name} (${L0.label})`);
+
+  let a = getArea(state.activeId);
+  if (!a) a = addArea({ picks: [] });
+  a.picks = a.picks || [];
+  const autoName = !a.geom || a.name === pickedName(a.picks) || /^אזור \d+$/.test(a.name);
+  let msg;
+  try {
+    if (a.picks.includes(name)) {
+      a.geom = turf.difference(turf.featureCollection([a.geom, poly]));
+      a.picks = a.picks.filter((n) => n !== name);
+      msg = `הוסר מ"${a.name}": ${name}`;
+    } else {
+      a.geom = a.geom ? turf.union(turf.featureCollection([a.geom, poly])) : poly;
+      a.picks.push(name);
+      a.origin = originOf(a);
+      msg = `נוסף ל"${a.name}": ${name} (${a.picks.length} באזור)`;
+    }
+  } catch (e) {
+    setStatus('לא ניתן היה למזג את הפוליגון: ' + e.message);
+    return;
+  }
+  if (autoName && a.picks.length) a.name = pickedName(a.picks);
+  if (!a.geom) a.origin = null;
+  geometryChanged(a);
+  setStatus(`${msg} — לחצו "חשב והשווה" כשתסיימו לבחור.`);
 }
 $$('.seg button').forEach((b) => { b.onclick = () => setMode(b.dataset.mode); });
 document.addEventListener('keydown', (e) => {
