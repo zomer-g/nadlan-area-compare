@@ -1,0 +1,156 @@
+{
+  "sources": {
+    "over": {
+      "type": "api",
+      "title": "גרסאות לעם (OVER)",
+      "url": "https://www.over.org.il",
+      "note": "מקור הנתונים העיקרי: מאגר העסקאות, שכבת החלקות ושכבות מרחביות."
+    },
+    "user_feedback_2026_09": {
+      "type": "external",
+      "title": "טבלאות עזר ממשתמש האתר",
+      "received": "2026-09-30",
+      "note": "טבלאות שנבנו ידנית על ידי משתמש האתר ונמסרו כחלק מפידבק. אינן מקור רשמי; כל תוצאה שעוברת דרכן מסומנת בהתאם.",
+      "tables": {
+        "nature_asset_type": {
+          "title": "סיווג מהות עסקה לסוג נכס (קטגוריות מפ\"י)",
+          "columns": {
+            "deal_nature": "מהות העסקה כפי שמופיעה במאגר רשות המסים",
+            "asset_type": "סוג נכס"
+          },
+          "rows": 34,
+          "origin": {
+            "file": "ריכוז כל הנתונים - מדולל לשנים 2020-2026 - לא למגורים בלבד.xlsx",
+            "sheet": "גיליון עזר",
+            "columns": "B:C"
+          },
+          "join": "deal_nature = deals.deal_nature (טקסט מדויק)",
+          "conflicts": []
+        },
+        "nature_use": {
+          "title": "סיווג מהות עסקה לשימוש (גרסת קובץ ההעשרה)",
+          "columns": {
+            "deal_nature": "מהות העסקה",
+            "use": "שימוש"
+          },
+          "rows": 45,
+          "origin": {
+            "file": "נתונים להעשרת המידע הנדלני.xlsx",
+            "sheet": "גיליון עזר",
+            "columns": "A:B"
+          },
+          "join": "deal_nature = deals.deal_nature (טקסט מדויק)",
+          "conflicts": []
+        },
+        "size_groups": {
+          "title": "קבוצות גודל לפי שטח הנכס",
+          "columns": {
+            "lower_raw": "גבול תחתון כפי שבקובץ (VLOOKUP מקורב)",
+            "upper_raw": "גבול עליון כפי שבקובץ",
+            "label": "תווית בקובץ"
+          },
+          "rows": 6,
+          "origin": {
+            "file": "ריכוז כל הנתונים - מדולל לשנים 2020-2026 - לא למגורים בלבד.xlsx",
+            "sheet": "גיליון עזר",
+            "columns": "F:H"
+          },
+          "note": "ב-VLOOKUP מקורב שטח נופל לשורה עם הגבול התחתון הגדול ביותר שאינו עולה עליו, ולכן התוויות אינן הגבולות בפועל: 'ללא גודל' מכסה 0 עד פחות מ-1.999999, '1-54' מכסה 1.999999 עד פחות מ-54.999999, וכן הלאה. ביישום יוגדרו גבולות מפורשים."
+        },
+        "gush_neighborhood": {
+          "title": "מיפוי גוש לשכונה",
+          "columns": {
+            "gush": "מספר גוש",
+            "neighborhood": "שם השכונה",
+            "authority": "רשות",
+            "ambiguous": "הגוש מופיע ביותר משכונה אחת"
+          },
+          "rows": 296,
+          "origin": {
+            "file": "ריכוז כל הנתונים - מדולל לשנים 2020-2026 - לא למגורים בלבד.xlsx",
+            "sheet": "גיליון עזר",
+            "columns": "N:P"
+          },
+          "join": "gush = deals.gush",
+          "note": "קירוב: גוש אינו תמיד חופף לשכונה. ברירת המחדל בקובץ לגוש שלא ממופה היא 'רחבי העיר'. חלק מהשורות ללא רשות. גושים שמופיעים בשתי שכונות מסומנים ambiguous — בקובץ המקורי נבחרה הראשונה.",
+          "conflicts": [
+            3946,
+            3947,
+            6219
+          ]
+        },
+        "building_year_period": {
+          "title": "שנת בנייה לתקופת בנייה",
+          "columns": {
+            "year_built": "שנת בנייה",
+            "period": "תקופה"
+          },
+          "rows": 146,
+          "origin": {
+            "file": "נתונים להעשרת המידע הנדלני.xlsx",
+            "sheet": "גיליון עזר",
+            "columns": "I:J"
+          },
+          "join": "year_built = deals.year_built",
+          "note": "ערכים לא סבירים (0, 1, 99, שנים עתידיות) ממופים ל'לא ידוע'."
+        },
+        "month_quarter": {
+          "title": "חודש לרבעון",
+          "columns": {
+            "month": "חודש",
+            "quarter": "רבעון"
+          },
+          "rows": 12,
+          "origin": {
+            "file": "נתונים להעשרת המידע הנדלני.xlsx",
+            "sheet": "גיליון עזר",
+            "columns": "D:E"
+          }
+        },
+        "settlements_cbs": {
+          "title": "יישובים ומאפייני הלמ\"ס",
+          "columns": {
+            "name": "שם יישוב",
+            "code": "סמל יישוב",
+            "founded": "שנת ייסוד",
+            "district_code": "סמל מחוז",
+            "district": "מחוז",
+            "subdistrict": "נפה",
+            "natural_region": "אזור טבעי",
+            "metropolin": "מטרופולין",
+            "settlement_type_code": "סמל צורת יישוב",
+            "settlement_type": "צורת יישוב",
+            "municipal_status": "מעמד מוניציפלי",
+            "authority_cluster": "אשכול רשויות מקומיות",
+            "authority_cluster_code": "סמל אשכול רשויות מקומיות",
+            "area": "שטח ישוב"
+          },
+          "rows": 1180,
+          "origin": {
+            "file": "נתונים להעשרת המידע הנדלני.xlsx",
+            "sheet": "גיליון עזר",
+            "columns": "AH:AU"
+          },
+          "join": "code = over_settlement_code(deals.settlement) — לא לפי שם",
+          "note": "נתוני הלמ\"ס כפי שהועתקו לקובץ. OVER מחזיק בחלק מהשדות (over_settlements: מחוז, נפה, מעמד מוניציפלי) אך לא באזור טבעי, מטרופולין, צורת יישוב ואשכול רשויות.",
+          "conflicts": []
+        },
+        "computed_parameters": {
+          "title": "הגדרות הפרמטרים המחושבים בקובץ ההעשרה",
+          "columns": {
+            "parameter": "שם הפרמטר",
+            "ref1": "פרמטר ייחוס 1",
+            "ref2": "פרמטר ייחוס 2",
+            "operator": "אופרטור"
+          },
+          "rows": 20,
+          "origin": {
+            "file": "נתונים להעשרת המידע הנדלני.xlsx",
+            "sheet": "גיליון עזר",
+            "columns": "AA:AD"
+          }
+        }
+      }
+    }
+  }
+}

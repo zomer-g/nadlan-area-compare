@@ -1,0 +1,21 @@
+parameter,ref1,ref2,operator
+שימוש,dealnaturedescription,,Vlookup
+שנת בניה,buildingyear,,Vlookup
+"מחיר למ""ר",dealnature,dealamount,חלוקה
+שנת העסקה,dealdate,,Vlookup
+חודש העסקה,dealdate,,Vlookup
+רבעון העסקה,dealdate,,Vlookup
+שנת ייסוד,city_name,,Vlookup
+סמל מחוז,city_name,,Vlookup
+מחוז,city_name,,Vlookup
+נפה,city_name,,Vlookup
+אזור טבעי,city_name,,Vlookup
+מטרופולין,city_name,,Vlookup
+סמל צורת יישוב,city_name,,Vlookup
+צורת יישוב,city_name,,Vlookup
+מעמד מוניציפלי,city_name,,Vlookup
+אשכול רשויות מקומיות,city_name,,Vlookup
+סמל אשכול רשויות מקומיות,city_name,,Vlookup
+שטח ישוב,city_name,,Vlookup
+פער שנת בניה לשנת עסקה,buildingyear,dealdate,הפרש
+יד,type,,If
