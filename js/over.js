@@ -197,11 +197,6 @@ LIMIT 1`;
 
 // ── Map helpers ─────────────────────────────────────────────────────────────
 
-export async function tableFeatures(table, bbox, columns, signal) {
-  const q = new URLSearchParams({ bbox: bbox.join(','), columns, limit: '5000' });
-  return getJson(`${OVER}/api/tables/${encodeURIComponent(table)}/features?${q}`, { signal });
-}
-
 export async function parcelFeatures(bbox, signal) {
   const q = new URLSearchParams({
     bbox: bbox.join(','),
