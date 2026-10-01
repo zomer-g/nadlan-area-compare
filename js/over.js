@@ -45,14 +45,16 @@ async function getJson(url, opts) {
 }
 
 export async function registerStats() {
-  const s = await getJson(`${OVER}/api/deals/stats`);
+  // no-store: OVER sends CORS headers only to requests with an Origin and no
+  // "Vary: Origin", so a cached copy can come back without them.
+  const s = await getJson(`${OVER}/api/deals/stats`, { cache: 'no-store' });
   const t = String(s?.table || '').replace(/^public\./, '');
   if (/^[a-z0-9_]+$/.test(t)) dealsTable = t; // goes into SQL unquoted
   return s;
 }
 
 export async function natures() {
-  const r = await getJson(`${OVER}/api/deals/natures`);
+  const r = await getJson(`${OVER}/api/deals/natures`, { cache: 'no-store' }); // see registerStats
   return r.data || [];
 }
 
