@@ -1,14 +1,14 @@
-import * as over from './over.js?v=dc2ab49878';
-import { METRICS, eligible, pointChange, logTrend, indexTo, within } from './stats.js?v=dc2ab49878';
+import * as over from './over.js?v=c24643912f';
+import { METRICS, eligible, pointChange, logTrend, indexTo, within } from './stats.js?v=c24643912f';
 import {
   SIZE_GROUPS, AGE_GROUPS, OUTLIER_METHODS, SIGMA_K, SIGMA_ROUNDS, SIGMA_MIN_N, PRESCREEN_K, SIGMA_REF_N, REFERENCE_STEPS, FIXED_RANGE, MIN_AMOUNT,
   MIN_YEAR_BUILT, MAX_YEARS_AHEAD, enrich, markOutliers, select, yearly, turnover,
-} from './analysis.js?v=dc2ab49878';
-import { loadExternal } from './external.js?v=dc2ab49878';
-import { createBrush } from './brush.js?v=dc2ab49878';
-import { createParcelLayer } from './parcels.js?v=dc2ab49878';
-import { createOverlays, OUTLINES, THEMES } from './layers.js?v=dc2ab49878';
-import { esc } from './util.js?v=dc2ab49878';
+} from './analysis.js?v=c24643912f';
+import { loadExternal } from './external.js?v=c24643912f';
+import { createBrush } from './brush.js?v=c24643912f';
+import { createParcelLayer } from './parcels.js?v=c24643912f';
+import { createOverlays, OUTLINES, THEMES } from './layers.js?v=c24643912f';
+import { esc } from './util.js?v=c24643912f';
 
 const COLORS = ['#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c', '#0891b2', '#ca8a04', '#db2777'];
 const STORE_KEY = 'nadlan-area-compare:v2';
@@ -1226,10 +1226,29 @@ over.registerStats().then((s) => {
     ${/^https?:\/\//.test(s.source_url || '') ? `<a href="${esc(s.source_url)}" target="_blank" rel="noopener">מקור: רשות המסים</a>` : ''}`;
 }).catch((e) => { $('#register').textContent = 'OVER לא זמין: ' + e.message; });
 
-Promise.all([over.natures(), loadExternal()]).then(([list, ext]) => {
-  state.natureList = list;
-  state.ext = ext;
-  renderTypes();
-}).catch((e) => {
-  $('#types').innerHTML = `<p class="neg small">טעינת סוגי העסקאות נכשלה: ${esc(e.message)}</p>`;
-});
+// The type list is needed before anything can be computed, and OVER
+// occasionally answers one request with an error (seen 2026-10-01 as a CORS
+// failure on a momentary error page), so it is retried, then offered by hand.
+async function retry(fn, tries = 4) {
+  for (let i = 0; ; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (i >= tries - 1) throw e;
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** i));
+    }
+  }
+}
+function loadTypes() {
+  $('#types').innerHTML = '<p class="muted small">טוען…</p>';
+  Promise.all([retry(() => over.natures()), retry(() => loadExternal())]).then(([list, ext]) => {
+    state.natureList = list;
+    state.ext = ext;
+    renderTypes();
+  }).catch((e) => {
+    $('#types').innerHTML = `<p class="neg small">טעינת סוגי העסקאות נכשלה: ${esc(e.message)}</p>
+      <button type="button" id="types-retry" class="small-btn">נסו שוב</button>`;
+    $('#types-retry').onclick = loadTypes;
+  });
+}
+loadTypes();

@@ -9,7 +9,7 @@
 // nothing. (Live, OVER returned full-resolution polygons: ~10 MB for one
 // Tel Aviv view.)
 
-import { esc } from './util.js?v=dc2ab49878';
+import { esc } from './util.js?v=c24643912f';
 
 const BASE = 'data/layers';
 
@@ -87,6 +87,24 @@ function store(layer) {
 
 const boxHits = (b, w, s, e, n) => b[0] <= e && b[2] >= w && b[1] <= n && b[3] >= s;
 
+// Inverse of scripts/build_layers.mjs encode(): integer 1e-5° deltas → GeoJSON.
+export function decodeRing(a) {
+  const ring = [];
+  let x = 0;
+  let y = 0;
+  for (let i = 0; i < a.length; i += 2) {
+    x += a[i];
+    y += a[i + 1];
+    ring.push([x / 1e5, y / 1e5]);
+  }
+  return ring;
+}
+export function decode(g) {
+  return g.t === 'P'
+    ? { type: 'Polygon', coordinates: g.c.map(decodeRing) }
+    : { type: 'MultiPolygon', coordinates: g.c.map((poly) => poly.map(decodeRing)) };
+}
+
 // Load every tile of `layer` that covers the bounds, plus the big polygons
 // (each in its own file) whose box the bounds touch. Resolves with the number of features
 // newly added; listeners are told about them.
@@ -113,7 +131,7 @@ async function ensure(layer, bounds) {
           const fresh = [];
           for (const f of fs) {
             if (st.features.has(f.id)) continue;
-            const feat = { type: 'Feature', id: f.id, properties: f.p, geometry: f.g, bbox: f.b };
+            const feat = { type: 'Feature', id: f.id, properties: f.p, geometry: decode(f.g), bbox: f.b };
             st.features.set(f.id, feat);
             fresh.push(feat);
           }

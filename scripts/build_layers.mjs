@@ -99,6 +99,29 @@ function bbox(geometry) {
   return [x0, y0, x1, y1];
 }
 
+// Geometry in tiles: coordinates as integers in 1e-5 degrees (~1 m), each
+// ring delta-encoded as a flat [x0, y0, dx1, dy1, …] array. About 60% smaller
+// than decimal GeoJSON, which matters because the host does not gzip.
+// js/layers.js decode() is the inverse.
+function encodeRing(ring) {
+  const out = [];
+  let px = 0;
+  let py = 0;
+  for (const [x, y] of ring) {
+    const ix = Math.round(x * 1e5);
+    const iy = Math.round(y * 1e5);
+    out.push(ix - px, iy - py);
+    px = ix;
+    py = iy;
+  }
+  return out;
+}
+function encode(g) {
+  return g.type === 'Polygon'
+    ? { t: 'P', c: g.coordinates.map(encodeRing) }
+    : { t: 'M', c: g.coordinates.map((poly) => poly.map(encodeRing)) };
+}
+
 export const tileKey = (ix, iy) => `${ix}_${iy}`;
 export const tileIndex = (deg) => Math.floor(deg / TILE + 1e-9);
 
@@ -120,7 +143,7 @@ async function build(key, def) {
     const g = JSON.parse(r.g);
     if (!['Polygon', 'MultiPolygon'].includes(g.type)) continue;
     const [x0, y0, x1, y1] = bbox(g);
-    const f = { id: String(r.id), p: def.props(r), b: [x0, y0, x1, y1].map((v) => Math.round(v * 1e5) / 1e5), g };
+    const f = { id: String(r.id), p: def.props(r), b: [x0, y0, x1, y1].map((v) => Math.round(v * 1e5) / 1e5), g: encode(g) };
     const span = (tileIndex(x1) - tileIndex(x0) + 1) * (tileIndex(y1) - tileIndex(y0) + 1);
     n += 1;
     if (span > SHARED_SPAN) { shared.push(f); continue; }
@@ -157,7 +180,7 @@ async function build(key, def) {
 }
 
 const only = process.argv[2];
-const manifest = { built: new Date().toISOString().slice(0, 10), source: 'OVER (over.org.il)', tile_deg: TILE, simplify_deg: SIMPLIFY, simplify_big_deg: SIMPLIFY_BIG, big_area_deg2: BIG_AREA, shared_span: SHARED_SPAN, layers: {} };
+const manifest = { built: new Date().toISOString().slice(0, 10), encoding: 'delta-int-1e5', source: 'OVER (over.org.il)', tile_deg: TILE, simplify_deg: SIMPLIFY, simplify_big_deg: SIMPLIFY_BIG, big_area_deg2: BIG_AREA, shared_span: SHARED_SPAN, layers: {} };
 for (const [k, def] of Object.entries(LAYERS)) {
   if (only && k !== only) continue;
   manifest.layers[k] = await build(k, def);
