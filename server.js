@@ -43,7 +43,9 @@ const safe = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).cat
 app.use(safe(async (req, res, next) => {
   const who = await identity(req);
   if (!who) {
-    if (wantsHtml(req)) return res.redirect(302, loginUrl(req.originalUrl));
+    // GET / always redirects: the platform's health check probes it with no
+    // Accept header and needs a 2xx/3xx.
+    if (wantsHtml(req) || (req.method === 'GET' && req.path === '/')) return res.redirect(302, loginUrl(req.originalUrl));
     return res.status(401).json({ error: 'not signed in', login: loginUrl('/') });
   }
   const row = await store.getUser(who.email);

@@ -89,3 +89,10 @@ test('saved analyses: create, list, open by link, update, delete', async (t) => 
   assert.equal((await call(5304, 'DELETE', `/api/analyses/${id}`)).status, 200);
   assert.equal((await call(5304, 'GET', `/api/analyses/${id}`)).status, 404);
 });
+
+test('the health check (GET / with no Accept header) gets a redirect, not an error', async (t) => {
+  const s = await start(5305, {});
+  t.after(() => s.kill());
+  const res = await fetch('http://localhost:5305/', { redirect: 'manual', headers: { Accept: '' } });
+  assert.equal(res.status, 302);
+});
