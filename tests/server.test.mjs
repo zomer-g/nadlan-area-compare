@@ -96,3 +96,14 @@ test('the health check (GET / with no Accept header) gets a redirect, not an err
   const res = await fetch('http://localhost:5305/', { redirect: 'manual', headers: { Accept: '' } });
   assert.equal(res.status, 302);
 });
+
+test('a malformed or forged identity cookie is treated as signed out', async (t) => {
+  const s = await start(5306, {});
+  t.after(() => s.kill());
+  const b = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const forged = `${b({ alg: 'none', typ: 'JWT' })}.${b({ iss: 'https://auth.xhostd.com', aud: 'localhost', email: 'boss@example.com', exp: 9999999999 })}.`;
+  for (const value of ['%E0%A4%A', forged]) {
+    const res = await fetch('http://localhost:5306/api/me', { headers: { Cookie: `__Host-xhost_id=${value}` } });
+    assert.equal(res.status, 401);
+  }
+});
