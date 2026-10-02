@@ -115,6 +115,29 @@ export function enrich(raw, natureType) {
   };
 }
 
+// The register repeats many whole-asset sales: the same deal twice, identical
+// in every field except the settlement (one row carries the settlement code,
+// the other leaves it empty) — 373,746 extra rows nationally on 2026-10-02,
+// 14% of all 100% deals. For a 100% sale, rows equal on every field but the
+// settlement are one deal: the first (preferring a row with a settlement code)
+// is kept, the rest are marked dup and counted nowhere. Partial sales are left
+// alone — two sales of a half each can be legitimately identical.
+export function dupKey(d) {
+  return [d.date, d.amt, d.decl, d.sqm, d.por, d.yb, d.rooms, d.nature, d.gush, d.chelka, d.sub].join('|');
+}
+export function markDuplicates(deals) {
+  const seen = new Set();
+  let n = 0;
+  const order = [...deals].sort((a, b) => Number(b.scode != null) - Number(a.scode != null));
+  for (const d of order) {
+    d.dup = false;
+    if (d.por !== 1) continue;
+    const k = dupKey(d);
+    if (seen.has(k)) { d.dup = true; n += 1; } else seen.add(k);
+  }
+  return n;
+}
+
 export function mean(xs) {
   return xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : null;
 }

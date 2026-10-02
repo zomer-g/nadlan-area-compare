@@ -1,5 +1,5 @@
 // User management: list, add, change role, approve pending, remove.
-import { esc } from './util.js?v=e0710ebd20';
+import { esc } from './util.js?v=4e7dd11582';
 
 const $ = (s) => document.querySelector(s);
 const ROLE = { admin: 'אדמין', viewer: 'צפייה', pending: 'ממתין לאישור' };

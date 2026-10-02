@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  sizeGroup, ageOf, ageGroup, enrich, markOutliers, yearly, select, mean, sd, median, turnover,
+  sizeGroup, ageOf, ageGroup, enrich, markOutliers, yearly, select, mean, sd, median, turnover, markDuplicates,
 } from '../public/js/analysis.js';
 
 const types = new Map([['דירה בבית קומות', 'מגורים רווי']]);
@@ -139,4 +139,22 @@ test('several tiny-portion deals cannot mask each other', () => {
   markOutliers(ds, 'sigma');
   assert.ok(tiny.every((d) => d.drop === 'outlier'));
   assert.ok(ds.slice(0, 40).filter((d) => d.drop).length <= 4); // the real market is barely touched
+});
+
+test('a 100% sale repeated with and without a settlement code is one deal', () => {
+  const withCode = [20221031, 2750000, null, 140, 1, 1985, 5, "קוטג' חד משפחתי", 38571, 42, 0, 666];
+  const noCode = [...withCode.slice(0, 11), null];
+  const ds = [enrich(noCode, types), enrich(withCode, types)];
+  assert.equal(markDuplicates(ds), 1);
+  assert.equal(ds[0].dup, true); // the row without the settlement code goes
+  assert.equal(ds[1].dup, false);
+});
+
+test('partial sales and deals differing in any field are not duplicates', () => {
+  const half = [20221031, 1000000, null, 100, 0.5, 1985, 4, 'דירה בבית קומות', 1, 2, 3, 666];
+  const ds = [enrich(half, types), enrich([...half.slice(0, 11), null], types)];
+  assert.equal(markDuplicates(ds), 0);
+  const a = [20221031, 1000000, null, 100, 1, 1985, 4, 'דירה בבית קומות', 1, 2, 3, 666];
+  const b = [20221031, 1000000, null, 100, 1, 1985, 4, 'דירה בבית קומות', 1, 2, 4, 666]; // other sub-parcel
+  assert.equal(markDuplicates([enrich(a, types), enrich(b, types)]), 0);
 });
