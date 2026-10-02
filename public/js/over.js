@@ -102,17 +102,31 @@ function areaCte(geometry) {
 // located by it (src 'm'). Never both for one number.
 export const SHUMA_PARCELS_TABLE = 'append_e_new_data_gov_il_9b2d6043';
 export const SHUMA_GUSH_TABLE = 'append_e_data_gov_il_d8d30a03';
-const PARCELS_CTE = `parcels AS (
-  SELECT DISTINCT p."GUSH_NUM" AS gush, p."PARCEL" AS chelka, 's' AS src
+//
+// Each parcel carries its area: the registered (legal) area when the layer
+// gives one, otherwise the area measured from the polygon (area_src 'g').
+const legalArea = (c) => `max(CASE WHEN ${c} ~ '^[0-9]+(\\.[0-9]+)?$' THEN ${c}::numeric END)`;
+const measuredArea = (c) => `max(extensions.ST_Area(${c}::extensions.geography))`;
+const PARCELS_CTE = `parcel_rows AS (
+  SELECT p."GUSH_NUM" AS gush, p."PARCEL" AS chelka, 's' AS src,
+    ${legalArea('p."LEGAL_AREA"')} AS legal, ${measuredArea('p.geom')} AS measured
   FROM ${PARCELS_TABLE} p, area
   WHERE extensions.ST_Intersects(p.geom, area.g)
     AND extensions.ST_Within(extensions.ST_PointOnSurface(p.geom), area.g)
-  UNION
-  SELECT DISTINCT m."GUSH_NUM", m."PARCEL", 'm'
+  GROUP BY 1, 2
+  UNION ALL
+  SELECT m."GUSH_NUM", m."PARCEL", 'm', ${legalArea('m."LEGAL_AREA"')}, ${measuredArea('m.geom')}
   FROM ${SHUMA_PARCELS_TABLE} m, area
   WHERE extensions.ST_Intersects(m.geom, area.g)
     AND extensions.ST_Within(extensions.ST_PointOnSurface(m.geom), area.g)
     AND NOT EXISTS (SELECT 1 FROM ${PARCELS_TABLE} x WHERE x."GUSH_NUM" = m."GUSH_NUM" AND x."PARCEL" = m."PARCEL")
+  GROUP BY 1, 2
+),
+parcels AS (
+  SELECT gush, chelka, src,
+    CASE WHEN legal > 0 THEN legal ELSE round(measured) END AS parcel_area,
+    CASE WHEN legal > 0 THEN 'l' ELSE 'g' END AS area_src
+  FROM parcel_rows
 )`;
 
 function dealsCte(f) {
@@ -123,7 +137,7 @@ function dealsCte(f) {
   ];
   if (f.natures?.length) where.push(`d.deal_nature IN (${f.natures.map(lit).join(', ')})`);
   return `deals AS (
-  SELECT d.*, parcels.src AS loc_src
+  SELECT d.*, parcels.src AS loc_src, parcels.parcel_area, parcels.area_src
   FROM ${getDealsTable()} d
   JOIN parcels USING (gush, chelka)
   WHERE ${where.join('\n    AND ')}
@@ -149,8 +163,9 @@ const HOUSEHOLDS_CTE = `households AS (
 // The deals come back as ONE row holding a JSON array of compact arrays
 // (OVER caps an answer at 1,000 rows, not at its size), so every statistic is
 // computed in the browser from the deals themselves:
-//   [yyyymmdd, amount, declared|null, area, portion, year_built, rooms, nature, gush, chelka, sub, settlement_code, loc_src]
+//   [yyyymmdd, amount, declared|null, area, portion, year_built, rooms, nature, gush, chelka, sub, settlement_code, loc_src, parcel_area, area_src]
 // loc_src: 's' = located by the statutory parcel layer, 'm' = by the shuma parcels.
+// parcel_area (m²) is the parcel's registered area, or measured from its polygon when area_src is 'g'.
 // declared is null when it equals the amount (95%+ of rows), to halve the payload.
 export const MAX_DEALS = 150000;
 export function dealsSql(geometry, f) {
@@ -164,6 +179,9 @@ ${HOUSEHOLDS_CTE}
 SELECT
   (SELECT count(*) FROM parcels) AS parcels_in_area,
   (SELECT count(*) FROM parcels WHERE src = 'm') AS shuma_parcels,
+  (SELECT round(sum(parcel_area)) FROM parcels) AS parcels_area,
+  (SELECT round(sum(parcel_area)) FROM parcels WHERE (gush, chelka) IN (SELECT gush, chelka FROM deals)) AS parcels_with_deals_area,
+  (SELECT count(*) FROM parcels WHERE area_src = 'g') AS parcels_area_measured,
   (SELECT count(*) FROM deals WHERE loc_src = 'm') AS shuma_deals,
   (SELECT count(DISTINCT (gush, chelka)) FROM deals) AS parcels_with_deals,
   (SELECT count(*) FROM deals) AS deals_total,
@@ -179,7 +197,8 @@ SELECT
       ${n('deal_amount')},
       CASE WHEN declared_amount = deal_amount THEN NULL ELSE ${n('declared_amount')} END,
       ${n('asset_area')}, ${n('portion')}, ${n('year_built')}, ${n('room_num')},
-      deal_nature, ${n('gush')}, ${n('chelka')}, ${n('sub_chelka')}, ${n('settlement_code')}, loc_src)
+      deal_nature, ${n('gush')}, ${n('chelka')}, ${n('sub_chelka')}, ${n('settlement_code')}, loc_src,
+      round(parcel_area), area_src)
       ORDER BY substr(deal_date, 7, 4) || substr(deal_date, 4, 2) || substr(deal_date, 1, 2) DESC, row_hash)
     FROM deals) END AS deals`;
 }

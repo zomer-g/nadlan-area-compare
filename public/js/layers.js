@@ -9,7 +9,7 @@
 // nothing. (Live, OVER returned full-resolution polygons: ~10 MB for one
 // Tel Aviv view.)
 
-import { esc } from './util.js?v=4e7dd11582';
+import { esc } from './util.js?v=edffb44336';
 
 const BASE = 'data/layers';
 

@@ -1,16 +1,16 @@
-import * as over from './over.js?v=4e7dd11582';
-import { METRICS, eligible, pointChange, logTrend, indexTo, within } from './stats.js?v=4e7dd11582';
+import * as over from './over.js?v=edffb44336';
+import { METRICS, eligible, pointChange, logTrend, indexTo, within } from './stats.js?v=edffb44336';
 import {
   markDuplicates,
   SIZE_GROUPS, AGE_GROUPS, OUTLIER_METHODS, SIGMA_K, SIGMA_ROUNDS, SIGMA_MIN_N, PRESCREEN_K, SIGMA_REF_N, REFERENCE_STEPS, FIXED_RANGE, MIN_AMOUNT,
   MIN_YEAR_BUILT, MAX_YEARS_AHEAD, enrich, markOutliers, select, yearly, turnover,
-} from './analysis.js?v=4e7dd11582';
-import { loadExternal } from './external.js?v=4e7dd11582';
-import { createBrush } from './brush.js?v=4e7dd11582';
-import { createParcelLayer } from './parcels.js?v=4e7dd11582';
-import { buildStatTables, AREA_COLS, SETTLEMENT_COLS } from './statexport.js?v=4e7dd11582';
-import { createOverlays, OUTLINES, THEMES } from './layers.js?v=4e7dd11582';
-import { esc } from './util.js?v=4e7dd11582';
+} from './analysis.js?v=edffb44336';
+import { loadExternal } from './external.js?v=edffb44336';
+import { createBrush } from './brush.js?v=edffb44336';
+import { createParcelLayer } from './parcels.js?v=edffb44336';
+import { buildStatTables, AREA_COLS, SETTLEMENT_COLS } from './statexport.js?v=edffb44336';
+import { createOverlays, OUTLINES, THEMES } from './layers.js?v=edffb44336';
+import { esc } from './util.js?v=edffb44336';
 
 const COLORS = ['#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c', '#0891b2', '#ca8a04', '#db2777'];
 const STORE_KEY = 'nadlan-area-compare:v2';
@@ -652,6 +652,9 @@ async function compute() {
           parcels_in_area: Number(row.parcels_in_area),
           shuma_parcels: Number(row.shuma_parcels || 0),
           shuma_deals: Number(row.shuma_deals || 0),
+          parcels_area: row.parcels_area == null ? null : Number(row.parcels_area),
+          parcels_with_deals_area: row.parcels_with_deals_area == null ? null : Number(row.parcels_with_deals_area),
+          parcels_area_measured: Number(row.parcels_area_measured || 0),
           parcels_with_deals: Number(row.parcels_with_deals),
           deals_total: Number(row.deals_total),
           households: row.households == null ? null : Number(row.households),
@@ -818,7 +821,7 @@ function renderCompare(list) {
   html += `<div class="chart-box"><h3 id="chart-compare-title"></h3><canvas id="chart-compare"></canvas></div>`;
 
   html += `<div class="tbl-wrap"><table><thead><tr>
-    <th>ייחוס</th><th>אזור</th><th>חלקות באזור / עם עסקאות</th><th>עסקאות שנשלפו</th><th>בשימוש לחישוב</th>
+    <th>ייחוס</th><th>אזור</th><th>חלקות באזור / עם עסקאות</th><th>שטח החלקות (דונם): כולן / עם עסקאות</th><th>עסקאות שנשלפו</th><th>בשימוש לחישוב</th>
     <th>${M.short} ${yr(f.cmpFrom)} (n)</th><th>${M.short} ${yr(f.cmpTo)} (n)</th><th>${METRICS[f.metric.replace(M.stat, other)].short} ${yr(f.cmpTo)} · ס"ת</th>
     <th>שינוי ${yr(f.cmpFrom)}→${yr(f.cmpTo)}</th><th>שינוי שנתי ממוצע (CAGR)</th>
     <th>מגמה שנתית (רגרסיה)</th><th>R²</th><th>רמת מחיר ביחס לייחוס</th><th>פער מגמה מול הייחוס</th>
@@ -826,7 +829,7 @@ function renderCompare(list) {
   </tr></thead><tbody>`;
   for (const a of list) {
     if (a.res.error) {
-      html += `<tr><td></td><td>${dot(a)}</td><td colspan="13" class="neg">${esc(a.res.error)}</td></tr>`;
+      html += `<tr><td></td><td>${dot(a)}</td><td colspan="14" class="neg">${esc(a.res.error)}</td></tr>`;
       continue;
     }
     const x = analyse(a);
@@ -843,6 +846,7 @@ function renderCompare(list) {
       <td><input type="radio" name="ref" value="${a.id}" ${isRef ? 'checked' : ''} aria-label="אזור ייחוס"></td>
       <td>${dot(a)}</td>
       <td class="n">${fmt(a.res.parcels_in_area)} / ${fmt(a.res.parcels_with_deals)}${a.res.shuma_parcels ? `<br><span class="muted small" title="חלקות שאינן בשכבה הסטטוטורית ואותרו לפי שכבת חלקות השומה">כולל ${fmt(a.res.shuma_parcels)} חלקות שומה · ${fmt(a.res.shuma_deals)} עסקאות</span>` : ''}</td>
+      <td class="n">${fmt(a.res.parcels_area / 1000, 1)} / ${fmt(a.res.parcels_with_deals_area / 1000, 1)}${a.res.parcels_area_measured ? `<br><span class="muted small" title="לחלקות האלה אין שטח רשום בשכבה; השטח שלהן מחושב מהפוליגון">${fmt(a.res.parcels_area_measured)} חלקות בשטח מחושב</span>` : ''}</td>
       <td class="n">${fmt(a.res.counted.length)}${a.res.duplicates ? `<br><span class="muted small" title="עסקאות 100% שזהות בכל השדות פרט ליישוב — נספרו פעם אחת">${fmt(a.res.duplicates)} כפולות לא נספרו</span>` : ''}</td>
       <td class="n ${q2 != null && q2 < LOW_QUALITY ? 'neg' : ''}">${share(q2)}</td>
       <td class="n">${from ? `${fmt(from.m)} (${fmt(from.n)})` : '<span class="muted">אין מספיק</span>'}</td>
@@ -1056,10 +1060,13 @@ function dealRow(a, d) {
     pp: d.pp == null ? '' : Math.round(d.pp),
     status: d.dup ? DUP_LABEL : d.drop ? DROP_LABEL[d.drop] : 'בשימוש',
     loc: d.shuma ? 'חלקת שומה' : 'סטטוטורי',
+    parcelArea: d.parcelArea == null ? '' : d.parcelArea,
+    parcelAreaSrc: d.parcelArea == null ? '' : d.parcelAreaMeasured ? 'מחושב מהפוליגון' : 'רשום',
   };
 }
 const DEAL_COLS = [
   ['date', 'תאריך'], ['settlement', 'יישוב'], ['gush', 'גוש'], ['chelka', 'חלקה'], ['sub', 'תת-חלקה'],
+  ['parcelArea', 'שטח החלקה (מ"ר)'], ['parcelAreaSrc', 'מקור שטח החלקה'],
   ['nbr', 'שכונה (טבלת עזר)'], ['nature', 'מהות'], ['type', 'סוג נכס'], ['amt', 'שווי עסקה'], ['decl', 'שווי מוצהר'],
   ['sqm', 'שטח'], ['por', 'חלק נמכר'], ['rooms', 'חדרים'], ['yb', 'שנת בנייה'], ['age', 'גיל'], ['ageGroup', 'קבוצת גיל'],
   ['size', 'קבוצת גודל'], ['pp', 'מחיר למ"ר מנורמל'], ['status', 'סטטוס בחישוב'], ['loc', 'מיקום לפי'],
@@ -1179,6 +1186,7 @@ function renderMethod(list) {
   <p><b>שכבת החלקות:</b> קודם השכבה הסטטוטורית (חלקות, המרכז למיפוי ישראל). רק גוש+חלקה שאינם בה כלל מאותרים לפי <b>שכבת חלקות השומה</b>, שהיא פחות מדויקת, והעסקאות שלהם מסומנות "חלקת שומה" בחומר הגלם ובטבלת ההשוואה.
   <b>מגבלה:</b> כ-17% מעסקאות המאגר רשומות על מספר חלקה שאינו קיים היום באף שכבה, בעיקר מספרים היסטוריים מלפני פרצלציה (28% מהעסקאות ב-1998–2004, 11% ב-2019–2026). עסקאות כאלה לא נמצאות באף אזור, ולכן בשנים המוקדמות נספרות פחות עסקאות.</p>
 
+  <p><b>שטח החלקות:</b> לכל חלקה נלקח השטח הרשום שלה בשכבה (LEGAL_AREA). כשאין שטח רשום, השטח מחושב מהפוליגון ומסומן "מחושב מהפוליגון". בטבלת ההשוואה מוצג סך שטח כל החלקות באזור, וסך שטח החלקות שיש בהן עסקאות מהסוגים והשנים שנבחרו. זה שטח החלקה כולה, לא שטח הנכס שנמכר.</p>
   <p><b>עסקאות כפולות:</b> במאגר מופיעות מכירות רבות של 100% מהנכס פעמיים, זהות בכל השדות פרט ליישוב (באחת יש סמל יישוב ובשנייה לא). עסקאות 100% שזהות בתאריך, בשווי, בשווי המוצהר, בשטח, בחלק הנמכר, בשנת הבנייה, בחדרים, במהות ובגוש/חלקה/תת-חלקה נחשבות עסקה אחת. נשמרת השורה עם סמל היישוב, והשאר מסומנות "כפולה" בחומר הגלם ולא נספרות בשום מקום: לא בסה"כ, לא בסטטיסטיקה ולא בתחלופה. בכל המאגר אלה 373,746 שורות, 14% מעסקאות ה-100%. מכירות חלקיות לא מאוחדות, כי שתי מכירות של חצי יכולות להיות זהות באמת.</p>
 
   <h3>2. סיווג הנכס</h3>

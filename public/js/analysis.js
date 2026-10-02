@@ -79,9 +79,9 @@ export function ageGroup(age) {
 
 const num = (v) => (v == null || v === '' ? null : Number(v));
 
-// raw = [yyyymmdd, amount, declared, area, portion, year_built, rooms, nature, gush, chelka, sub, settlement_code, loc_src]
+// raw = [yyyymmdd, amount, declared, area, portion, year_built, rooms, nature, gush, chelka, sub, settlement_code, loc_src, parcel_area, area_src]
 export function enrich(raw, natureType) {
-  const [date, amt0, decl0, sqm0, por0, yb0, rooms, nature, gush, chelka, sub, scode, locSrc] = raw;
+  const [date, amt0, decl0, sqm0, por0, yb0, rooms, nature, gush, chelka, sub, scode, locSrc, parcelArea, areaSrc] = raw;
   const yr = Math.floor(date / 10000);
   const amt = num(amt0);
   const sqm = num(sqm0);
@@ -106,6 +106,8 @@ export function enrich(raw, natureType) {
     sub,
     scode: scode ?? null,
     shuma: locSrc === 'm', // located by a tax-assessment parcel, not a statutory one
+    parcelArea: num(parcelArea), // m² of the whole parcel (not of the asset sold)
+    parcelAreaMeasured: areaSrc === 'g', // measured from the polygon: no registered area
     valid,
     pp: valid ? amt / (sqm * por) : null,
     size: sizeGroup(sqm),
