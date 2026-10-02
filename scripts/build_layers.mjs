@@ -10,12 +10,12 @@
 // touches; the client de-duplicates by id. These are census snapshots that do
 // not move, so the layers are rebuilt by hand when CBS publishes new data.
 
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SQL = 'https://www.over.org.il/api/append/fd06f5ae-8a4f-4120-b275-8a514ad23499/sql';
-const OUT = join(dirname(fileURLToPath(import.meta.url)), '..', 'data', 'layers');
+const OUT = join(dirname(fileURLToPath(import.meta.url)), '..', 'public', 'data', 'layers');
 export const TILE = 0.1; // degrees, ~11 km × 9 km
 const SIMPLIFY = 0.00004; // degrees, ~4 m
 // Large polygons (rural statistical areas, some hundreds of km²) are simplified
@@ -36,6 +36,40 @@ const geo = `extensions.ST_AsGeoJSON(extensions.ST_SimplifyPreserveTopology(exte
 const num = (e) => `CASE WHEN ${e} ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ${e}::numeric END`;
 
 const LAYERS = {
+  gush: {
+    title: 'גושים ותת-גושים — המרכז למיפוי ישראל',
+    over_table: 'append_subgushallshape_aa29e909',
+    // The table keeps every version it has seen: pick the latest row per
+    // gush+suffix WITHOUT geometry, page through those keys, and simplify only
+    // the page (simplifying all 37k rows first hit OVER's 10 s limit).
+    page: (limit, offset) => `SELECT k.id, k.gush, k.suffix, k.locality, k.status,
+        extensions.ST_AsGeoJSON(extensions.ST_SimplifyPreserveTopology(extensions.ST_MakeValid(t.geom),
+          CASE WHEN extensions.ST_Area(t.geom) > ${BIG_AREA} THEN ${SIMPLIFY_BIG} ELSE ${SIMPLIFY} END), 5) AS g
+      FROM (SELECT DISTINCT ON ("GUSH_NUM", "GUSH_SUFFI")
+              "GUSH_NUM" || '-' || coalesce(NULLIF("GUSH_SUFFI", ''), '0') AS id,
+              "GUSH_NUM" AS gush, "GUSH_SUFFI" AS suffix, "LOCALITY_N" AS locality, "STATUS_TEX" AS status, row_hash
+            FROM append_subgushallshape_aa29e909 WHERE geom IS NOT NULL
+            ORDER BY "GUSH_NUM", "GUSH_SUFFI", first_seen DESC) k
+      JOIN append_subgushallshape_aa29e909 t USING (row_hash)
+      ORDER BY k.id LIMIT ${limit} OFFSET ${offset}`,
+    // Second source, appended: the tax-assessment blocks (גושי שומה, 688 rows)
+    // whose number the gush map lacks — 336 of 684 on 2026-10-02, mostly
+    // unregistered land. (None of them carries a deal, so this is for display
+    // and picking, not for the deal join.)
+    extraPage: (limit, offset) => `SELECT 'S-' || "GUSH_NUM" || '-' || coalesce(NULLIF("GUSH_SUFFI", ''), '0') AS id,
+        "GUSH_NUM" AS gush, "GUSH_SUFFI" AS suffix, '' AS locality, 'גוש שומה' AS status, 'shuma' AS kind,
+        extensions.ST_AsGeoJSON(extensions.ST_SimplifyPreserveTopology(extensions.ST_MakeValid(geom),
+          CASE WHEN extensions.ST_Area(geom) > ${BIG_AREA} THEN ${SIMPLIFY_BIG} ELSE ${SIMPLIFY} END), 5) AS g
+      FROM append_e_data_gov_il_d8d30a03
+      WHERE geom IS NOT NULL
+        AND "GUSH_NUM" NOT IN (SELECT DISTINCT "GUSH_NUM" FROM append_subgushallshape_aa29e909)
+      ORDER BY 1 LIMIT ${limit} OFFSET ${offset}`,
+    props: (r) => {
+      const suf = Number(r.suffix) ? `/${Number(r.suffix)}` : '';
+      const shuma = r.kind === 'shuma';
+      return { name: `${shuma ? 'גוש שומה' : 'גוש'} ${Number(r.gush)}${suf}`, gush: Number(r.gush), locality: r.locality || '', status: r.status || '', ...(shuma ? { shuma: 1 } : {}) };
+    },
+  },
   nbr: {
     title: 'שכונות — המרכז למיפוי ישראל',
     over_table: 'idx.govmap_22_bd519a1c_f6a7046f',
@@ -129,12 +163,16 @@ export const tileIndex = (deg) => Math.floor(deg / TILE + 1e-9);
 
 async function build(key, def) {
   const rows = [];
-  for (let offset = 0; ; offset += PAGE) {
-    const page = await run(`SELECT * FROM (${def.sql}) q ORDER BY id LIMIT ${PAGE} OFFSET ${offset}`);
-    rows.push(...page);
-    process.stdout.write(`\r${key}: ${rows.length}`);
-    await sleep(PAUSE_MS);
-    if (page.length < PAGE) break;
+  const sources = [def.page || ((l, o) => `SELECT * FROM (${def.sql}) q ORDER BY id LIMIT ${l} OFFSET ${o}`)];
+  if (def.extraPage) sources.push(def.extraPage);
+  for (const src of sources) {
+    for (let offset = 0; ; offset += PAGE) {
+      const page = await run(src(PAGE, offset));
+      rows.push(...page);
+      process.stdout.write(`\r${key}: ${rows.length}`);
+      await sleep(PAUSE_MS);
+      if (page.length < PAGE) break;
+    }
   }
   console.log();
   const tiles = new Map();
@@ -198,4 +236,9 @@ for (const [k, def] of Object.entries(LAYERS)) {
   if (only && k !== only) continue;
   manifest.layers[k] = await build(k, def);
 }
-if (!only) writeFileSync(join(OUT, 'manifest.json'), JSON.stringify(manifest, null, 1));
+// Building one layer (`node scripts/build_layers.mjs gush`) keeps the others' entries.
+if (only) {
+  const prev = JSON.parse(readFileSync(join(OUT, 'manifest.json'), 'utf8'));
+  manifest.layers = { ...prev.layers, ...manifest.layers };
+}
+writeFileSync(join(OUT, 'manifest.json'), JSON.stringify(manifest, null, 1));

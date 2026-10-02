@@ -1,7 +1,7 @@
 // npm test  (node --test tests/*.test.mjs)
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { eligible, pointChange, logTrend, indexTo, within } from '../js/stats.js';
+import { eligible, pointChange, logTrend, indexTo, within } from '../public/js/stats.js';
 
 const close = (a, b, eps = 1e-9) => assert.ok(Math.abs(a - b) < eps, `${a} ≉ ${b}`);
 

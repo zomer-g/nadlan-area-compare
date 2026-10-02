@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { decode, decodeRing, quantileBreaks } from '../js/layers.js';
+import { decode, decodeRing, quantileBreaks } from '../public/js/layers.js';
 
 test('decodeRing reverses integer delta encoding', () => {
   // (34.78, 32.08) → (34.78001, 32.08) → (34.78, 32.08002) → back to start
@@ -10,10 +10,10 @@ test('decodeRing reverses integer delta encoding', () => {
 });
 
 test('every shipped tile decodes to closed rings inside its box', () => {
-  const m = JSON.parse(fs.readFileSync(new URL('../data/layers/manifest.json', import.meta.url)));
+  const m = JSON.parse(fs.readFileSync(new URL('../public/data/layers/manifest.json', import.meta.url)));
   for (const layer of Object.keys(m.layers)) {
     const tile = m.layers[layer].tiles[0];
-    const fs0 = JSON.parse(fs.readFileSync(new URL(`../data/layers/${layer}/${tile}.json`, import.meta.url)));
+    const fs0 = JSON.parse(fs.readFileSync(new URL(`../public/data/layers/${layer}/${tile}.json`, import.meta.url)));
     for (const f of fs0) {
       const g = decode(f.g);
       const polys = g.type === 'Polygon' ? [g.coordinates] : g.coordinates;

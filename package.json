@@ -3,11 +3,22 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Draw areas on a map and compare Israeli real-estate deals between them. Data: OVER (over.org.il).",
+  "description": "Draw areas on a map and compare Israeli real-estate deals between them, behind xhostd sign-in. Data: OVER (over.org.il).",
   "scripts": {
-    "test": "node --test tests/stats.test.mjs tests/analysis.test.mjs tests/external.test.mjs tests/layers.test.mjs",
-    "serve": "npx --yes http-server -p 5190 -c-1",
-    "stamp": "node scripts/stamp.mjs"
+    "start": "node server.js",
+    "dev": "node scripts/dev.mjs",
+    "test": "node --test tests/stats.test.mjs tests/analysis.test.mjs tests/external.test.mjs tests/layers.test.mjs tests/server.test.mjs",
+    "stamp": "node scripts/stamp.mjs",
+    "layers": "node scripts/build_layers.mjs"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "compression": "1.7.5",
+    "express": "4.21.2",
+    "jose": "5.9.6",
+    "pg": "8.13.1"
+  },
+  "engines": {
+    "node": ">=22"
+  }
 }

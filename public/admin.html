@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ניהול משתמשים</title>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+  <link rel="stylesheet" href="css/style.css?v=799bfd562a">
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>ניהול משתמשים</h1>
+      <p class="sub"><a href="/">← חזרה למפה</a></p>
+    </div>
+    <div id="me" class="register muted"></div>
+  </header>
+  <main class="admin">
+    <section class="panel">
+      <h2>הוספת משתמש</h2>
+      <form id="add" class="row" style="flex-wrap:wrap">
+        <input id="email" type="email" placeholder="name@gmail.com" required style="max-width:280px">
+        <select id="role" style="max-width:140px">
+          <option value="viewer">צפייה</option>
+          <option value="admin">אדמין</option>
+        </select>
+        <button type="submit">הוסף / עדכן</button>
+      </form>
+      <p class="muted small">הכניסה היא בחשבון Google (דרך xhostd). "צפייה" = שימוש מלא באתר, שמירת ניתוחים ושיתוף. "אדמין" = גם ניהול משתמשים. מי שנכנס בלי הרשאה מופיע ברשימה כ"ממתין" ואפשר לאשר אותו בלחיצה.</p>
+      <p id="msg" class="small" aria-live="polite"></p>
+    </section>
+    <section class="panel">
+      <h2>משתמשים</h2>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>מייל</th><th>שם</th><th>הרשאה</th><th>נוסף על ידי</th><th>כניסה אחרונה</th><th></th></tr></thead>
+        <tbody id="users"></tbody>
+      </table></div>
+    </section>
+  </main>
+  <script type="module" src="js/admin.js?v=799bfd562a"></script>
+</body>
+</html>

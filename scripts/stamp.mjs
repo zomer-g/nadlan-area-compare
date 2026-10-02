@@ -13,9 +13,9 @@ import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const root = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const jsFiles = readdirSync(join(root, 'js')).filter((f) => f.endsWith('.js')).map((f) => join('js', f));
-const hashed = [...jsFiles, 'css/style.css', 'index.html'];
+const hashed = [...jsFiles, 'css/style.css', 'index.html', 'admin.html'];
 
 // Hash the contents with any previous stamps removed, so re-running is stable.
 const unstamp = (s) => s.replace(/\?v=[0-9a-f]{10}/g, '');
@@ -28,8 +28,10 @@ for (const f of jsFiles) {
   const src = unstamp(readFileSync(p, 'utf8'));
   writeFileSync(p, src.replace(/(from\s+'\.\/[\w-]+\.js)'/g, `$1?v=${v}'`));
 }
-const ip = join(root, 'index.html');
-writeFileSync(ip, unstamp(readFileSync(ip, 'utf8'))
-  .replace('src="js/app.js"', `src="js/app.js?v=${v}"`)
-  .replace('href="css/style.css"', `href="css/style.css?v=${v}"`));
+for (const [html, script] of [['index.html', 'js/app.js'], ['admin.html', 'js/admin.js']]) {
+  const ip = join(root, html);
+  writeFileSync(ip, unstamp(readFileSync(ip, 'utf8'))
+    .replace(`src="${script}"`, `src="${script}?v=${v}"`)
+    .replace('href="css/style.css"', `href="css/style.css?v=${v}"`));
+}
 console.log(`stamped v=${v}`);

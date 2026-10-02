@@ -17,7 +17,7 @@ from pathlib import Path
 
 import openpyxl
 
-OUT = Path(__file__).resolve().parent.parent / "data" / "external"
+OUT = Path(__file__).resolve().parent.parent / "public" / "data" / "external"
 
 
 def helper_rows(path):

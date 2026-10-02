@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   sizeGroup, ageOf, ageGroup, enrich, markOutliers, yearly, select, mean, sd, median, turnover,
-} from '../js/analysis.js';
+} from '../public/js/analysis.js';
 
 const types = new Map([['דירה בבית קומות', 'מגורים רווי']]);
 // [yyyymmdd, amount, declared, area, portion, year_built, rooms, nature, gush, chelka, sub, scode]
