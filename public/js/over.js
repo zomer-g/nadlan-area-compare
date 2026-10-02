@@ -101,6 +101,7 @@ function areaCte(geometry) {
 // precise): only then is the shuma polygon used, and the deal is marked as
 // located by it (src 'm'). Never both for one number.
 export const SHUMA_PARCELS_TABLE = 'append_e_new_data_gov_il_9b2d6043';
+export const SHUMA_GUSH_TABLE = 'append_e_data_gov_il_d8d30a03';
 const PARCELS_CTE = `parcels AS (
   SELECT DISTINCT p."GUSH_NUM" AS gush, p."PARCEL" AS chelka, 's' AS src
   FROM ${PARCELS_TABLE} p, area
@@ -249,8 +250,12 @@ export async function gushExtent(gush) {
 FROM ${PARCELS_TABLE} WHERE "GUSH_NUM" = ${lit(String(Number(gush)))}`;
   const r = await runSql(sql);
   const row = r.rows?.[0];
-  if (!row?.box) return null;
-  return { box: JSON.parse(row.box), parcels: row.parcels };
+  if (row?.box) return { box: JSON.parse(row.box), parcels: row.parcels, shuma: false };
+  // Not in the statutory parcels: the tax-assessment block (גוש שומה), marked.
+  const s = (await runSql(`SELECT extensions.ST_AsGeoJSON(extensions.ST_Union(geom), 6) AS geom
+FROM ${SHUMA_GUSH_TABLE} WHERE "GUSH_NUM" = ${lit(String(Number(gush)))}`)).rows?.[0];
+  if (!s?.geom) return null;
+  return { box: JSON.parse(s.geom), parcels: null, shuma: true };
 }
 
 // Free-text places go to OpenStreetMap's geocoder: OVER's address index covers

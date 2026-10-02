@@ -1,15 +1,15 @@
-import * as over from './over.js?v=8779b90a2d';
-import { METRICS, eligible, pointChange, logTrend, indexTo, within } from './stats.js?v=8779b90a2d';
+import * as over from './over.js?v=e0710ebd20';
+import { METRICS, eligible, pointChange, logTrend, indexTo, within } from './stats.js?v=e0710ebd20';
 import {
   SIZE_GROUPS, AGE_GROUPS, OUTLIER_METHODS, SIGMA_K, SIGMA_ROUNDS, SIGMA_MIN_N, PRESCREEN_K, SIGMA_REF_N, REFERENCE_STEPS, FIXED_RANGE, MIN_AMOUNT,
   MIN_YEAR_BUILT, MAX_YEARS_AHEAD, enrich, markOutliers, select, yearly, turnover,
-} from './analysis.js?v=8779b90a2d';
-import { loadExternal } from './external.js?v=8779b90a2d';
-import { createBrush } from './brush.js?v=8779b90a2d';
-import { createParcelLayer } from './parcels.js?v=8779b90a2d';
-import { buildStatTables, AREA_COLS, SETTLEMENT_COLS } from './statexport.js?v=8779b90a2d';
-import { createOverlays, OUTLINES, THEMES } from './layers.js?v=8779b90a2d';
-import { esc } from './util.js?v=8779b90a2d';
+} from './analysis.js?v=e0710ebd20';
+import { loadExternal } from './external.js?v=e0710ebd20';
+import { createBrush } from './brush.js?v=e0710ebd20';
+import { createParcelLayer } from './parcels.js?v=e0710ebd20';
+import { buildStatTables, AREA_COLS, SETTLEMENT_COLS } from './statexport.js?v=e0710ebd20';
+import { createOverlays, OUTLINES, THEMES } from './layers.js?v=e0710ebd20';
+import { esc } from './util.js?v=e0710ebd20';
 
 const COLORS = ['#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c', '#0891b2', '#ca8a04', '#db2777'];
 const STORE_KEY = 'nadlan-area-compare:v2';
@@ -565,7 +565,9 @@ $('#search-form').onsubmit = async (e) => {
       if (!r) throw new Error(`גוש ${g[1]} לא נמצא בשכבת החלקות`);
       showHighlight(r.box);
       const nbr = state.ext?.neighborhoodOf(Number(g[1]));
-      out.innerHTML = `<li class="muted">גוש ${esc(g[1])} · ${fmt(r.parcels)} חלקות${nbr ? ` · שכונה לפי טבלת העזר: ${esc(nbr)}` : ''}</li>`;
+      out.innerHTML = r.shuma
+        ? `<li class="muted">גוש שומה ${esc(g[1])} — לא סטטוטורי (אין לו חלקות בשכבה הסטטוטורית)</li>`
+        : `<li class="muted">גוש ${esc(g[1])} · ${fmt(r.parcels)} חלקות${nbr ? ` · שכונה לפי טבלת העזר: ${esc(nbr)}` : ''}</li>`;
     } else {
       const res = await over.geocode(q);
       if (!res.length) throw new Error('לא נמצאו תוצאות');

@@ -6,8 +6,8 @@
 // OVER allows 30 feature requests a minute, so the layer fetches a padded box
 // once and does not refetch while the view stays inside it.
 
-import { parcelFeatures, shumaParcelFeatures } from './over.js?v=8779b90a2d';
-import { esc } from './util.js?v=8779b90a2d';
+import { parcelFeatures, shumaParcelFeatures } from './over.js?v=e0710ebd20';
+import { esc } from './util.js?v=e0710ebd20';
 
 const MIN_ZOOM = 16;
 const LABEL_ZOOM = 18;
