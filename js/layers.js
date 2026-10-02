@@ -9,7 +9,7 @@
 // nothing. (Live, OVER returned full-resolution polygons: ~10 MB for one
 // Tel Aviv view.)
 
-import { esc } from './util.js?v=e3290199e3';
+import { esc } from './util.js?v=b0a5c0da42';
 
 const BASE = 'data/layers';
 
@@ -43,7 +43,10 @@ export const THEMES = {
     note: 'הלמ"ס, מדד 2021 על חלוקת האזורים הסטטיסטיים של 2011 (1 = הנמוך ביותר).',
   },
   pop: { label: 'אוכלוסייה 2024', layer: 'stat22', field: 'pop', fmt: (v) => `${n0(v)} תושבים`, note: 'הלמ"ס, אומדן אוכלוסייה 2024 לפי אזור סטטיסטי 2022.' },
-  density: { label: 'צפיפות אוכלוסייה 2022 (נפש לקמ"ר)', layer: 'stat22', field: 'density', fmt: (v) => `${n0(v)} לקמ"ר`, note: 'מפקד 2022.' },
+  density: {
+    label: 'צפיפות אוכלוסייה 2024 (נפש לקמ"ר)', layer: 'stat22', field: 'density_calc', fmt: (v) => `${n0(v)} לקמ"ר`,
+    note: 'מחושב: אומדן אוכלוסייה 2024 ÷ שטח הא"ס. (הלמ"ס פרסמה צפיפות ל-1,042 מתוך 3,857 אזורים בלבד, ולאף אזור בתל אביב.)',
+  },
   hh: { label: 'משקי בית 2022', layer: 'stat22', field: 'hh', fmt: (v) => `${n0(v)} משקי בית`, note: 'מפקד 2022, מעוגל.' },
   age: { label: 'גיל חציוני 2022', layer: 'stat22', field: 'age', fmt: (v) => `גיל חציוני ${v}`, note: 'מפקד 2022.' },
   own: { label: '% משקי בית בדירה בבעלות 2022', layer: 'stat22', field: 'own', fmt: (v) => `${v}% בבעלות`, note: 'מפקד 2022.' },
@@ -105,25 +108,12 @@ export function decode(g) {
     : { type: 'MultiPolygon', coordinates: g.c.map((poly) => poly.map(decodeRing)) };
 }
 
-// Load every tile of `layer` that covers the bounds, plus the big polygons
-// (each in its own file) whose box the bounds touch. Resolves with the number of features
-// newly added; listeners are told about them.
-async function ensure(layer, bounds) {
+// Fetch the given files of a layer (tile keys, or "_big/<id>"), each once.
+// Resolves with the number of features newly added; listeners are told.
+async function ensureFiles(layer, files) {
   const m = await manifest();
-  const meta = m.layers[layer];
   const st = store(layer);
-  const T = m.tile_deg;
-  const w = bounds.getWest(), s = bounds.getSouth(), e = bounds.getEast(), n = bounds.getNorth();
-  const wanted = [];
-  const have = new Set(meta.tiles);
-  for (let ix = Math.floor(w / T); ix <= Math.floor(e / T); ix++) {
-    for (let iy = Math.floor(s / T); iy <= Math.floor(n / T); iy++) {
-      const k = `${ix}_${iy}`;
-      if (have.has(k)) wanted.push(k);
-    }
-  }
-  for (const [id, b] of Object.entries(meta.big || {})) if (boxHits(b, w, s, e, n)) wanted.push(`_big/${id}`);
-  const jobs = wanted.filter((k) => !st.loaded.has(k)).map((k) => {
+  const jobs = files.filter((k) => !st.loaded.has(k)).map((k) => {
     if (!st.pending.has(k)) {
       st.pending.set(k, fetch(`${BASE}/${layer}/${k}.json?v=${m.built}`)
         .then((r) => { if (!r.ok) throw new Error(`tile ${k}: HTTP ${r.status}`); return r.json(); })
@@ -132,6 +122,10 @@ async function ensure(layer, bounds) {
           for (const f of fs) {
             if (st.features.has(f.id)) continue;
             const feat = { type: 'Feature', id: f.id, properties: f.p, geometry: decode(f.g), bbox: f.b };
+            if (f.p.pop != null) {
+              const km2 = turf.area(feat) / 1e6;
+              if (km2 > 0) feat.properties.density_calc = Math.round(Number(f.p.pop) / km2);
+            }
             st.features.set(f.id, feat);
             fresh.push(feat);
           }
@@ -147,6 +141,37 @@ async function ensure(layer, bounds) {
   const counts = await Promise.all(jobs);
   return counts.reduce((a, b) => a + b, 0);
 }
+
+// Every tile of `layer` that covers the box [w, s, e, n], plus the big
+// polygons (each in its own file) whose box it touches.
+export async function ensureBox(layer, [w, s, e, n]) {
+  const m = await manifest();
+  const meta = m.layers[layer];
+  const T = m.tile_deg;
+  const have = new Set(meta.tiles);
+  const files = [];
+  for (let ix = Math.floor(w / T); ix <= Math.floor(e / T); ix++) {
+    for (let iy = Math.floor(s / T); iy <= Math.floor(n / T); iy++) {
+      const k = `${ix}_${iy}`;
+      if (have.has(k)) files.push(k);
+    }
+  }
+  for (const [id, b] of Object.entries(meta.big || {})) if (boxHits(b, w, s, e, n)) files.push(`_big/${id}`);
+  return ensureFiles(layer, files);
+}
+
+// Every statistical area of the given settlements (CBS codes), wherever they are.
+export async function ensureSettlements(layer, codes) {
+  const m = await manifest();
+  const idx = m.layers[layer].by_settlement || {};
+  return ensureFiles(layer, [...new Set(codes.flatMap((c) => idx[c] || []))]);
+}
+
+export function loadedFeatures(layer) {
+  return [...store(layer).features.values()];
+}
+
+const ensure = (layer, b) => ensureBox(layer, [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
 
 // A map layer over a tile store. Features are added as their tiles arrive and
 // kept (a tile is never fetched twice); `inView()` lists those in the view.

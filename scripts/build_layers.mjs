@@ -44,6 +44,7 @@ const LAYERS = {
   },
   stat22: {
     title: 'אזורים סטטיסטיים 2022 — מפקד 2022 (למ"ס), עם אומדן אוכלוסייה 2024',
+    bySettlement: true,
     over_table: 'append_cbs_pub_file_7a4d3897_38170565 + append_cbs_pub_file_a74ad779_a13c151c',
     // Census 2022 polygons, joined to the 2024 population estimate on the
     // locality+area code (same 2022 geography in both files).
@@ -69,6 +70,7 @@ const LAYERS = {
   },
   stat11: {
     title: 'אזורים סטטיסטיים 2011 — מדד חברתי-כלכלי 2021 (למ"ס)',
+    bySettlement: true,
     over_table: 'append_cbs_pub_file_afb48290_5fa5cab4',
     sql: `SELECT "YISHUV_STAT11" AS id, "STAT11" AS stat, "SHEM_YISHUV" AS setl, ${num('"eshkol_madad2021"')} AS socio, ${geo} AS g
       FROM append_cbs_pub_file_afb48290_5fa5cab4 WHERE geom IS NOT NULL`,
@@ -137,6 +139,15 @@ async function build(key, def) {
   console.log();
   const tiles = new Map();
   const shared = [];
+  // Statistical-area ids are <settlement code><4-digit area>: index which
+  // files hold each settlement's areas, so the client can fetch a whole local
+  // authority without knowing where it is.
+  const bySetl = {};
+  const addSetl = (id, file) => {
+    if (!def.bySettlement) return;
+    const code = Math.floor(Number(id) / 10000);
+    (bySetl[code] ??= new Set()).add(file);
+  };
   let n = 0;
   for (const r of rows) {
     if (!r.g) continue;
@@ -146,12 +157,13 @@ async function build(key, def) {
     const f = { id: String(r.id), p: def.props(r), b: [x0, y0, x1, y1].map((v) => Math.round(v * 1e5) / 1e5), g: encode(g) };
     const span = (tileIndex(x1) - tileIndex(x0) + 1) * (tileIndex(y1) - tileIndex(y0) + 1);
     n += 1;
-    if (span > SHARED_SPAN) { shared.push(f); continue; }
+    if (span > SHARED_SPAN) { shared.push(f); addSetl(f.id, `_big/${f.id}`); continue; }
     for (let ix = tileIndex(x0); ix <= tileIndex(x1); ix++) {
       for (let iy = tileIndex(y0); iy <= tileIndex(y1); iy++) {
         const k = tileKey(ix, iy);
         if (!tiles.has(k)) tiles.set(k, []);
         tiles.get(k).push(f);
+        addSetl(f.id, k);
       }
     }
   }
@@ -176,6 +188,7 @@ async function build(key, def) {
     title: def.title, over_table: def.over_table, polygons: n, tiles: [...tiles.keys()].sort(), bytes,
     // id → box, so the client fetches a big polygon only when the view touches it.
     big: Object.fromEntries(shared.map((f) => [f.id, f.b])), big_bytes: bigBytes,
+    ...(def.bySettlement ? { by_settlement: Object.fromEntries(Object.entries(bySetl).map(([k, v]) => [k, [...v].sort()])) } : {}),
   };
 }
 

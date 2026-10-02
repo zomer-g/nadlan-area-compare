@@ -1,14 +1,15 @@
-import * as over from './over.js?v=e3290199e3';
-import { METRICS, eligible, pointChange, logTrend, indexTo, within } from './stats.js?v=e3290199e3';
+import * as over from './over.js?v=b0a5c0da42';
+import { METRICS, eligible, pointChange, logTrend, indexTo, within } from './stats.js?v=b0a5c0da42';
 import {
   SIZE_GROUPS, AGE_GROUPS, OUTLIER_METHODS, SIGMA_K, SIGMA_ROUNDS, SIGMA_MIN_N, PRESCREEN_K, SIGMA_REF_N, REFERENCE_STEPS, FIXED_RANGE, MIN_AMOUNT,
   MIN_YEAR_BUILT, MAX_YEARS_AHEAD, enrich, markOutliers, select, yearly, turnover,
-} from './analysis.js?v=e3290199e3';
-import { loadExternal } from './external.js?v=e3290199e3';
-import { createBrush } from './brush.js?v=e3290199e3';
-import { createParcelLayer } from './parcels.js?v=e3290199e3';
-import { createOverlays, OUTLINES, THEMES } from './layers.js?v=e3290199e3';
-import { esc } from './util.js?v=e3290199e3';
+} from './analysis.js?v=b0a5c0da42';
+import { loadExternal } from './external.js?v=b0a5c0da42';
+import { createBrush } from './brush.js?v=b0a5c0da42';
+import { createParcelLayer } from './parcels.js?v=b0a5c0da42';
+import { buildStatTables, AREA_COLS, SETTLEMENT_COLS } from './statexport.js?v=b0a5c0da42';
+import { createOverlays, OUTLINES, THEMES } from './layers.js?v=b0a5c0da42';
+import { esc } from './util.js?v=b0a5c0da42';
 
 const COLORS = ['#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c', '#0891b2', '#ca8a04', '#db2777'];
 const STORE_KEY = 'nadlan-area-compare:v2';
@@ -132,14 +133,46 @@ layersCtl.onAdd = () => {
     <label>מפה נושאית
       <select id="theme"><option value="">ללא</option>${Object.entries(THEMES).map(([k, t]) => `<option value="${k}">${esc(t.label)}</option>`).join('')}</select>
     </label>
+    <div class="dl-box"><b>הורדת נתוני א"ס (CSV)</b>
+      <button type="button" data-dl="areas" title="כל אזור סטטיסטי שחותך כל אחד מאזורי הניתוח, עם החלק שבתוך האזור">לאזורי הניתוח</button>
+      <button type="button" data-dl="settlements" title="כל האזורים הסטטיסטיים של הרשויות המקומיות שאזורי הניתוח נמצאים בהן">לרשויות המקומיות שלהם</button>
+    </div>
     <div id="layers-status" class="muted"></div>`;
   L.DomEvent.disableClickPropagation(div);
   L.DomEvent.disableScrollPropagation(div);
   $$('[data-outline]', div).forEach((c) => { c.onchange = () => overlays.setOutline(c.dataset.outline, c.checked); });
   $('#theme', div).onchange = (e) => overlays.setTheme(e.target.value);
+  $$('[data-dl]', div).forEach((b) => { b.onclick = () => downloadStats(b.dataset.dl, b); });
   return div;
 };
 layersCtl.addTo(map);
+// Statistical-area tables of every theme, for the analysis areas or for the
+// local authorities they fall in (js/statexport.js).
+async function downloadStats(kind, btn) {
+  const say = (m) => { $('#layers-status').textContent = m; };
+  const areas = state.areas.filter((a) => a.geom).map((a) => ({ name: a.name, geom: a.geom }));
+  if (!areas.length) {
+    say('אין אזורי ניתוח — סמנו אזור או בחרו שכונה קודם.');
+    return;
+  }
+  btn.disabled = true;
+  try {
+    const t = await buildStatTables(areas, say);
+    const day = new Date().toISOString().slice(0, 10);
+    if (kind === 'areas') {
+      download(`אזורים-סטטיסטיים_אזורי-ניתוח_${day}.csv`, csv(t.areaRows, AREA_COLS));
+      say(`הורד: ${fmt(t.areaRows.length)} שורות (א"ס × אזור ניתוח).`);
+    } else {
+      download(`אזורים-סטטיסטיים_רשויות_${day}.csv`, csv(t.settlementRows, SETTLEMENT_COLS));
+      say(`הורד: ${fmt(t.settlementRows.length)} אזורים סטטיסטיים ב-${fmt(t.settlements)} רשויות.`);
+    }
+  } catch (e) {
+    say(`ההורדה נכשלה: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 function syncOutlineBoxes() {
   for (const [k, o] of Object.entries(overlays.outlines)) {
     const c = $(`[data-outline="${k}"]`);
