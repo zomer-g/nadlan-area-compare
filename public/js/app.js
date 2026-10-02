@@ -1,15 +1,15 @@
-import * as over from './over.js?v=799bfd562a';
-import { METRICS, eligible, pointChange, logTrend, indexTo, within } from './stats.js?v=799bfd562a';
+import * as over from './over.js?v=8779b90a2d';
+import { METRICS, eligible, pointChange, logTrend, indexTo, within } from './stats.js?v=8779b90a2d';
 import {
   SIZE_GROUPS, AGE_GROUPS, OUTLIER_METHODS, SIGMA_K, SIGMA_ROUNDS, SIGMA_MIN_N, PRESCREEN_K, SIGMA_REF_N, REFERENCE_STEPS, FIXED_RANGE, MIN_AMOUNT,
   MIN_YEAR_BUILT, MAX_YEARS_AHEAD, enrich, markOutliers, select, yearly, turnover,
-} from './analysis.js?v=799bfd562a';
-import { loadExternal } from './external.js?v=799bfd562a';
-import { createBrush } from './brush.js?v=799bfd562a';
-import { createParcelLayer } from './parcels.js?v=799bfd562a';
-import { buildStatTables, AREA_COLS, SETTLEMENT_COLS } from './statexport.js?v=799bfd562a';
-import { createOverlays, OUTLINES, THEMES } from './layers.js?v=799bfd562a';
-import { esc } from './util.js?v=799bfd562a';
+} from './analysis.js?v=8779b90a2d';
+import { loadExternal } from './external.js?v=8779b90a2d';
+import { createBrush } from './brush.js?v=8779b90a2d';
+import { createParcelLayer } from './parcels.js?v=8779b90a2d';
+import { buildStatTables, AREA_COLS, SETTLEMENT_COLS } from './statexport.js?v=8779b90a2d';
+import { createOverlays, OUTLINES, THEMES } from './layers.js?v=8779b90a2d';
+import { esc } from './util.js?v=8779b90a2d';
 
 const COLORS = ['#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c', '#0891b2', '#ca8a04', '#db2777'];
 const STORE_KEY = 'nadlan-area-compare:v2';
@@ -127,7 +127,8 @@ map.attributionControl.setPrefix(false);
 
 const parcels = createParcelLayer(map, (msg) => { $('#parcel-status').textContent = msg; }, {
   picking: () => state.mode === 'pick-parcel',
-  onPick: (name, geometry) => addPicked('parcel', name, geometry, 'שכבת החלקות (מ-OVER, בזמן אמת)'),
+  onPick: (name, geometry, shuma) => addPicked('parcel', name, geometry,
+    shuma ? 'שכבת חלקות השומה — לא סטטוטורית (מ-OVER)' : 'שכבת החלקות הסטטוטורית (מ-OVER, בזמן אמת)'),
 });
 
 // Data layers, in a control right under the base-map switcher.
@@ -645,6 +646,8 @@ async function compute() {
         a.res = {
           sig, sql, geometry, filters: sqlFilters,
           parcels_in_area: Number(row.parcels_in_area),
+          shuma_parcels: Number(row.shuma_parcels || 0),
+          shuma_deals: Number(row.shuma_deals || 0),
           parcels_with_deals: Number(row.parcels_with_deals),
           deals_total: Number(row.deals_total),
           households: row.households == null ? null : Number(row.households),
@@ -831,7 +834,7 @@ function renderCompare(list) {
     html += `<tr>
       <td><input type="radio" name="ref" value="${a.id}" ${isRef ? 'checked' : ''} aria-label="אזור ייחוס"></td>
       <td>${dot(a)}</td>
-      <td class="n">${fmt(a.res.parcels_in_area)} / ${fmt(a.res.parcels_with_deals)}</td>
+      <td class="n">${fmt(a.res.parcels_in_area)} / ${fmt(a.res.parcels_with_deals)}${a.res.shuma_parcels ? `<br><span class="muted small" title="חלקות שאינן בשכבה הסטטוטורית ואותרו לפי שכבת חלקות השומה">כולל ${fmt(a.res.shuma_parcels)} חלקות שומה · ${fmt(a.res.shuma_deals)} עסקאות</span>` : ''}</td>
       <td class="n">${fmt(a.res.deals_total)}</td>
       <td class="n ${q2 != null && q2 < LOW_QUALITY ? 'neg' : ''}">${share(q2)}</td>
       <td class="n">${from ? `${fmt(from.m)} (${fmt(from.n)})` : '<span class="muted">אין מספיק</span>'}</td>
@@ -1044,13 +1047,14 @@ function dealRow(a, d) {
     age: d.age ?? '', ageGroup: ageLabel(d.ageGroup), size: sizeLabel(d.size),
     pp: d.pp == null ? '' : Math.round(d.pp),
     status: d.drop ? DROP_LABEL[d.drop] : 'בשימוש',
+    loc: d.shuma ? 'חלקת שומה' : 'סטטוטורי',
   };
 }
 const DEAL_COLS = [
   ['date', 'תאריך'], ['settlement', 'יישוב'], ['gush', 'גוש'], ['chelka', 'חלקה'], ['sub', 'תת-חלקה'],
   ['nbr', 'שכונה (טבלת עזר)'], ['nature', 'מהות'], ['type', 'סוג נכס'], ['amt', 'שווי עסקה'], ['decl', 'שווי מוצהר'],
   ['sqm', 'שטח'], ['por', 'חלק נמכר'], ['rooms', 'חדרים'], ['yb', 'שנת בנייה'], ['age', 'גיל'], ['ageGroup', 'קבוצת גיל'],
-  ['size', 'קבוצת גודל'], ['pp', 'מחיר למ"ר מנורמל'], ['status', 'סטטוס בחישוב'],
+  ['size', 'קבוצת גודל'], ['pp', 'מחיר למ"ר מנורמל'], ['status', 'סטטוס בחישוב'], ['loc', 'מיקום לפי'],
 ];
 const YEAR_COLS = [['yr', 'שנה'], ['total', 'עסקאות'], ['valid', 'עם נתונים מלאים וגודל'], ['used', 'בשימוש'],
   ['mean', 'ממוצע'], ['median', 'חציון'], ['sd', 'סטיית תקן']];
@@ -1163,6 +1167,9 @@ function renderMethod(list) {
   <p>אזור הוא ציור במברשת (קו שמורחב לשני צדדיו בחצי מעובי המברשת, איחוד המשיכות פחות משיכות המחק), או שכונה / אזור סטטיסטי שנבחרו בלחיצה על המפה.
   המאגר של רשות המסים אינו כולל קואורדינטות — רק גוש וחלקה — ולכן נכללת כל חלקה ש<b>נקודה פנימית שלה</b> (ST_PointOnSurface) בתוך האזור, והעסקאות מחוברות לחלקות לפי גוש + חלקה.
   נשלפים סוגי הנכס ${esc((q.types || []).join(', '))} והשנים ${yr(q.yearMin)}–${yr(q.yearMax)}; כל השאר מחושב בדפדפן מהעסקאות עצמן.</p>
+
+  <p><b>שכבת החלקות:</b> קודם השכבה הסטטוטורית (חלקות, המרכז למיפוי ישראל). רק גוש+חלקה שאינם בה כלל מאותרים לפי <b>שכבת חלקות השומה</b>, שהיא פחות מדויקת, והעסקאות שלהם מסומנות "חלקת שומה" בחומר הגלם ובטבלת ההשוואה.
+  <b>מגבלה:</b> כ-17% מעסקאות המאגר רשומות על מספר חלקה שאינו קיים היום באף שכבה, בעיקר מספרים היסטוריים מלפני פרצלציה (28% מהעסקאות ב-1998–2004, 11% ב-2019–2026). עסקאות כאלה לא נמצאות באף אזור, ולכן בשנים המוקדמות נספרות פחות עסקאות.</p>
 
   <h3>2. סיווג הנכס</h3>
   <p>כל מהות עסקה של רשות המסים ממופה לסוג נכס (קטגוריות מפ"י) לפי טבלת עזר חיצונית${src ? ` — "${esc(src.title)}"` : ''}. מהויות שאינן בטבלה מסווגות "${UNMAPPED}". "לא רלבנטי" ו"סחר נדל"ן" אינם בניתוח המגורים כברירת מחדל. הרשימה המלאה בפאנל הסינון.</p>

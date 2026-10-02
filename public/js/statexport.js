@@ -7,7 +7,7 @@
 // on the 2011 geography; each 2022 area takes the index of the 2011 area that
 // contains a point inside it, and the table names that 2011 area.
 
-import { ensureBox, ensureSettlements, loadedFeatures } from './layers.js?v=799bfd562a';
+import { ensureBox, ensureSettlements, loadedFeatures } from './layers.js?v=8779b90a2d';
 
 const setlOf = (id) => Math.floor(Number(id) / 10000);
 const statOf = (id) => Number(id) % 10000;

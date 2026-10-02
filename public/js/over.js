@@ -96,11 +96,22 @@ function areaCte(geometry) {
 // Parcels whose interior point lies inside the area. ST_Intersects first lets
 // the GiST index do the cut; the point-on-surface test keeps a large parcel the
 // brush only grazed from dragging its deals in.
+// Statutory parcels first. A gush+parcel number the statutory layer does not
+// have at all may still be in the tax-assessment parcels (חלקות שומה, less
+// precise): only then is the shuma polygon used, and the deal is marked as
+// located by it (src 'm'). Never both for one number.
+export const SHUMA_PARCELS_TABLE = 'append_e_new_data_gov_il_9b2d6043';
 const PARCELS_CTE = `parcels AS (
-  SELECT DISTINCT p."GUSH_NUM" AS gush, p."PARCEL" AS chelka
+  SELECT DISTINCT p."GUSH_NUM" AS gush, p."PARCEL" AS chelka, 's' AS src
   FROM ${PARCELS_TABLE} p, area
   WHERE extensions.ST_Intersects(p.geom, area.g)
     AND extensions.ST_Within(extensions.ST_PointOnSurface(p.geom), area.g)
+  UNION
+  SELECT DISTINCT m."GUSH_NUM", m."PARCEL", 'm'
+  FROM ${SHUMA_PARCELS_TABLE} m, area
+  WHERE extensions.ST_Intersects(m.geom, area.g)
+    AND extensions.ST_Within(extensions.ST_PointOnSurface(m.geom), area.g)
+    AND NOT EXISTS (SELECT 1 FROM ${PARCELS_TABLE} x WHERE x."GUSH_NUM" = m."GUSH_NUM" AND x."PARCEL" = m."PARCEL")
 )`;
 
 function dealsCte(f) {
@@ -111,7 +122,7 @@ function dealsCte(f) {
   ];
   if (f.natures?.length) where.push(`d.deal_nature IN (${f.natures.map(lit).join(', ')})`);
   return `deals AS (
-  SELECT d.*
+  SELECT d.*, parcels.src AS loc_src
   FROM ${getDealsTable()} d
   JOIN parcels USING (gush, chelka)
   WHERE ${where.join('\n    AND ')}
@@ -137,7 +148,8 @@ const HOUSEHOLDS_CTE = `households AS (
 // The deals come back as ONE row holding a JSON array of compact arrays
 // (OVER caps an answer at 1,000 rows, not at its size), so every statistic is
 // computed in the browser from the deals themselves:
-//   [yyyymmdd, amount, declared|null, area, portion, year_built, rooms, nature, gush, chelka, sub, settlement_code]
+//   [yyyymmdd, amount, declared|null, area, portion, year_built, rooms, nature, gush, chelka, sub, settlement_code, loc_src]
+// loc_src: 's' = located by the statutory parcel layer, 'm' = by the shuma parcels.
 // declared is null when it equals the amount (95%+ of rows), to halve the payload.
 export const MAX_DEALS = 150000;
 export function dealsSql(geometry, f) {
@@ -150,6 +162,8 @@ ${dealsCte(f)},
 ${HOUSEHOLDS_CTE}
 SELECT
   (SELECT count(*) FROM parcels) AS parcels_in_area,
+  (SELECT count(*) FROM parcels WHERE src = 'm') AS shuma_parcels,
+  (SELECT count(*) FROM deals WHERE loc_src = 'm') AS shuma_deals,
   (SELECT count(DISTINCT (gush, chelka)) FROM deals) AS parcels_with_deals,
   (SELECT count(*) FROM deals) AS deals_total,
   (SELECT hh FROM households) AS households,
@@ -164,7 +178,7 @@ SELECT
       ${n('deal_amount')},
       CASE WHEN declared_amount = deal_amount THEN NULL ELSE ${n('declared_amount')} END,
       ${n('asset_area')}, ${n('portion')}, ${n('year_built')}, ${n('room_num')},
-      deal_nature, ${n('gush')}, ${n('chelka')}, ${n('sub_chelka')}, ${n('settlement_code')})
+      deal_nature, ${n('gush')}, ${n('chelka')}, ${n('sub_chelka')}, ${n('settlement_code')}, loc_src)
       ORDER BY substr(deal_date, 7, 4) || substr(deal_date, 4, 2) || substr(deal_date, 1, 2) DESC, row_hash)
     FROM deals) END AS deals`;
 }
@@ -199,6 +213,13 @@ LIMIT 1`;
 
 // ── Map helpers ─────────────────────────────────────────────────────────────
 
+// The tax-assessment parcels (חלקות שומה) for the same box; the caller keeps
+// only those whose gush+parcel number the statutory layer lacks.
+export async function shumaParcelFeatures(bbox, signal) {
+  const q = new URLSearchParams({ bbox: bbox.join(','), columns: 'GUSH_NUM,GUSH_SUFFI,PARCEL,LEGAL_AREA', limit: '5000' });
+  return getJson(`${OVER}/api/tables/${SHUMA_PARCELS_TABLE}/features?${q}`, { signal });
+}
+
 export async function parcelFeatures(bbox, signal) {
   const q = new URLSearchParams({
     bbox: bbox.join(','),
@@ -208,9 +229,19 @@ export async function parcelFeatures(bbox, signal) {
   return getJson(`${OVER}/api/tables/${PARCELS_TABLE}/features?${q}`, { signal });
 }
 
+// Statutory first; if the number is not there, the tax-assessment parcel
+// (marked shuma: true — less precise).
 export async function parcelGeometry(gush, helka) {
-  const r = await getJson(`${OVER}/api/nadlan/parcel/${gush}/${helka}/geometry`);
-  return { ...r, geometry: JSON.parse(r.geojson) };
+  try {
+    const r = await getJson(`${OVER}/api/nadlan/parcel/${gush}/${helka}/geometry`);
+    return { ...r, geometry: JSON.parse(r.geojson), shuma: false };
+  } catch (e) {
+    const sql = `SELECT extensions.ST_AsGeoJSON(geom, 6) AS geojson, "LEGAL_AREA" AS legal_area
+FROM ${SHUMA_PARCELS_TABLE} WHERE "GUSH_NUM" = ${lit(String(Number(gush)))} AND "PARCEL" = ${lit(String(Number(helka)))} LIMIT 1`;
+    const row = (await runSql(sql)).rows?.[0];
+    if (!row) throw e;
+    return { gush: Number(gush), helka: Number(helka), legal_area: row.legal_area, status_text: 'חלקת שומה — לא סטטוטורית', geometry: JSON.parse(row.geojson), shuma: true };
+  }
 }
 
 export async function gushExtent(gush) {
