@@ -1,16 +1,16 @@
-import * as over from './over.js?v=edffb44336';
-import { METRICS, eligible, pointChange, logTrend, indexTo, within } from './stats.js?v=edffb44336';
+import * as over from './over.js?v=ac1e29f923';
+import { METRICS, eligible, pointChange, logTrend, indexTo, within } from './stats.js?v=ac1e29f923';
 import {
   markDuplicates,
   SIZE_GROUPS, AGE_GROUPS, OUTLIER_METHODS, SIGMA_K, SIGMA_ROUNDS, SIGMA_MIN_N, PRESCREEN_K, SIGMA_REF_N, REFERENCE_STEPS, FIXED_RANGE, MIN_AMOUNT,
   MIN_YEAR_BUILT, MAX_YEARS_AHEAD, enrich, markOutliers, select, yearly, turnover,
-} from './analysis.js?v=edffb44336';
-import { loadExternal } from './external.js?v=edffb44336';
-import { createBrush } from './brush.js?v=edffb44336';
-import { createParcelLayer } from './parcels.js?v=edffb44336';
-import { buildStatTables, AREA_COLS, SETTLEMENT_COLS } from './statexport.js?v=edffb44336';
-import { createOverlays, OUTLINES, THEMES } from './layers.js?v=edffb44336';
-import { esc } from './util.js?v=edffb44336';
+} from './analysis.js?v=ac1e29f923';
+import { loadExternal } from './external.js?v=ac1e29f923';
+import { createBrush } from './brush.js?v=ac1e29f923';
+import { createParcelLayer } from './parcels.js?v=ac1e29f923';
+import { buildStatTables, AREA_COLS, SETTLEMENT_COLS } from './statexport.js?v=ac1e29f923';
+import { createOverlays, OUTLINES, THEMES } from './layers.js?v=ac1e29f923';
+import { esc } from './util.js?v=ac1e29f923';
 
 const COLORS = ['#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c', '#0891b2', '#ca8a04', '#db2777'];
 const STORE_KEY = 'nadlan-area-compare:v2';

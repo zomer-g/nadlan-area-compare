@@ -107,3 +107,24 @@ test('a malformed or forged identity cookie is treated as signed out', async (t)
     assert.equal(res.status, 401);
   }
 });
+
+test('open sign-up: a new signed-in user becomes a viewer at once', async (t) => {
+  const s = await start(5307, { DEV_USER_EMAIL: 'newcomer@example.com', OPEN_SIGNUP: 'true' });
+  t.after(() => s.kill());
+  const me = await call(5307, 'GET', '/api/me');
+  assert.equal(me.status, 200);
+  assert.equal(me.json.role, 'viewer');
+  assert.equal(me.json.open_signup, true);
+  assert.equal((await call(5307, 'GET', '/api/users')).status, 403); // a viewer is not an admin
+});
+
+test('a blocked user stays out even with open sign-up', async (t) => {
+  // One dev identity per process, so this checks the admin side: a user can be
+  // set to blocked, an env admin cannot.
+  const s = await start(5308, { DEV_USER_EMAIL: 'boss@example.com', OPEN_SIGNUP: 'true' });
+  t.after(() => s.kill());
+  assert.equal((await call(5308, 'POST', '/api/users', { email: 'bad@example.com', role: 'blocked' })).status, 200);
+  assert.equal((await call(5308, 'POST', '/api/users', { email: 'second@example.com', role: 'blocked' })).status, 409);
+  const users = (await call(5308, 'GET', '/api/users')).json;
+  assert.equal(users.find((u) => u.email === 'bad@example.com').role, 'blocked');
+});

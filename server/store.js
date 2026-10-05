@@ -7,7 +7,13 @@
 import pg from 'pg';
 import { randomBytes } from 'node:crypto';
 
-export const ROLES = ['viewer', 'admin'];
+// Roles an admin can set. 'blocked' keeps a signed-in user out even when
+// sign-up is open (removing them would not: they would sign up again).
+export const ROLES = ['viewer', 'admin', 'blocked'];
+
+// OPEN_SIGNUP=true: anyone who signs in with SSO becomes a viewer on the spot,
+// with no admin approval. Off (the default), they wait as 'pending'.
+export const OPEN_SIGNUP = /^(1|true|yes)$/i.test(process.env.OPEN_SIGNUP || '');
 
 // Admins named in the environment are admins whatever the table says, and the
 // UI cannot demote or remove them: there is always a way back in.
@@ -20,7 +26,7 @@ const newId = () => randomBytes(9).toString('base64url'); // 12 chars, unguessab
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   email       text PRIMARY KEY,
-  role        text NOT NULL CHECK (role IN ('pending', 'viewer', 'admin')),
+  role        text NOT NULL,
   name        text NOT NULL DEFAULT '',
   added_by    text,
   created_at  timestamptz NOT NULL DEFAULT now(),
@@ -35,6 +41,9 @@ CREATE TABLE IF NOT EXISTS analyses (
   updated_at  timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS analyses_owner ON analyses (owner, updated_at DESC);
+-- The original role check did not know 'blocked'; replace it (idempotent).
+ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
+ALTER TABLE users ADD CONSTRAINT users_role_check CHECK (role IN ('pending', 'viewer', 'admin', 'blocked'));
 `;
 
 function pgStore(url) {
@@ -112,6 +121,7 @@ export function createStore() {
 }
 
 // The effective role: environment admins first, then the table.
+// 'blocked' and null both mean no access; the gate tells them apart.
 export function roleOf(email, row) {
   if (ENV_ADMINS.has(email)) return 'admin';
   return row && ROLES.includes(row.role) ? row.role : null;

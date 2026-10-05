@@ -10,7 +10,7 @@ import compression from 'compression';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { identity, loginUrl, LOGOUT_URL } from './server/auth.js';
-import { createStore, roleOf, ROLES, ENV_ADMINS } from './server/store.js';
+import { createStore, roleOf, ROLES, ENV_ADMINS, OPEN_SIGNUP } from './server/store.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), 'public');
 const store = createStore();
@@ -49,8 +49,21 @@ app.use(safe(async (req, res, next) => {
     return res.status(401).json({ error: 'not signed in', login: loginUrl('/') });
   }
   const row = await store.getUser(who.email);
-  const role = roleOf(who.email, row);
+  let role = roleOf(who.email, row);
   await store.touch(who.email, who.name).catch(() => {});
+  // Open sign-up: a signed-in user with no role (new, or left pending from
+  // before sign-up was opened) becomes a viewer now. Never a blocked one.
+  if (!role && OPEN_SIGNUP) {
+    await store.setUser(who.email, 'viewer', 'הרשמה עצמית');
+    role = 'viewer';
+  }
+  if (role === 'blocked') {
+    const body = `<h1>הגישה שלך נחסמה</h1>
+      <p>נכנסת בתור <code>${esc(who.email)}</code>. אם זו טעות, פנה/י למנהל האתר.</p>
+      <p><a href="${LOGOUT_URL}">התנתקות</a></p>`;
+    if (wantsHtml(req)) return res.status(403).type('html').send(page('הגישה נחסמה', body));
+    return res.status(403).json({ error: 'blocked', email: who.email });
+  }
   if (!role) {
     const body = `<h1>אין לך עדיין גישה</h1>
       <p>נכנסת בתור <code>${esc(who.email)}</code>. הבקשה שלך נרשמה, ומנהל/ת יכול/ה לאשר אותה בממשק ניהול המשתמשים.</p>
@@ -70,7 +83,7 @@ const validEmail = (e) => typeof e === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.
 
 // ── API ─────────────────────────────────────────────────────────────────────
 app.get('/api/me', (req, res) => {
-  res.json({ email: req.user.email, name: req.user.name, role: req.user.role, logout: LOGOUT_URL, store: store.kind });
+  res.json({ email: req.user.email, name: req.user.name, role: req.user.role, logout: LOGOUT_URL, store: store.kind, open_signup: OPEN_SIGNUP });
 });
 
 app.get('/api/users', adminOnly, safe(async (req, res) => {
@@ -84,7 +97,7 @@ app.post('/api/users', adminOnly, safe(async (req, res) => {
   const email = String(req.body?.email || '').trim().toLowerCase();
   const role = req.body?.role;
   if (!validEmail(email)) return res.status(400).json({ error: 'כתובת מייל לא תקינה' });
-  if (!ROLES.includes(role)) return res.status(400).json({ error: 'role must be viewer or admin' });
+  if (!ROLES.includes(role)) return res.status(400).json({ error: 'role must be viewer, admin or blocked' });
   if (ENV_ADMINS.has(email) && role !== 'admin') return res.status(409).json({ error: 'מנהל שמוגדר במשתני הסביבה (ADMIN_EMAILS) — אי אפשר לשנות מהממשק' });
   await store.setUser(email, role, req.user.email);
   res.json({ ok: true });
@@ -148,4 +161,4 @@ app.use(express.static(ROOT, {
 }));
 
 const port = Number(process.env.XHOST_HTTP_PORT || process.env.PORT || 5190);
-app.listen(port, '0.0.0.0', () => console.log(`listening on 0.0.0.0:${port} (store: ${store.kind}, env admins: ${ENV_ADMINS.size})`));
+app.listen(port, '0.0.0.0', () => console.log(`listening on 0.0.0.0:${port} (store: ${store.kind}, env admins: ${ENV_ADMINS.size}, open sign-up: ${OPEN_SIGNUP})`));
