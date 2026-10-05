@@ -32,7 +32,7 @@ export async function identity(req) {
   // that did not come from this machine — the Host header is the client's to set.
   const loopback = ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.socket.remoteAddress);
   if (process.env.DEV_USER_EMAIL && !process.env.DATABASE_URL && loopback) {
-    return { email: process.env.DEV_USER_EMAIL.toLowerCase(), name: 'dev', sub: 'dev' };
+    return { email: process.env.DEV_USER_EMAIL.toLowerCase() };
   }
   const token = cookie(req, COOKIE);
   if (!token) return null;
@@ -40,7 +40,9 @@ export async function identity(req) {
   try {
     const { payload } = await jwtVerify(token, JWKS, { issuer: ISSUER, audience, algorithms: ['RS256'] });
     if (!payload.email) return null;
-    return { email: String(payload.email).toLowerCase(), name: payload.name || '', sub: payload.sub };
+    // The email is all the app needs (it is the account key). The token's
+    // name, picture and the rest are not read, so they are never stored.
+    return { email: String(payload.email).toLowerCase() };
   } catch {
     return null; // expired, forged, or for another host
   }

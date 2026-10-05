@@ -128,3 +128,25 @@ test('a blocked user stays out even with open sign-up', async (t) => {
   const users = (await call(5308, 'GET', '/api/users')).json;
   assert.equal(users.find((u) => u.email === 'bad@example.com').role, 'blocked');
 });
+
+test('only the email is kept about a user, and a shared link does not name its owner', async (t) => {
+  const s = await start(5307, { DEV_USER_EMAIL: 'boss@example.com' });
+  t.after(() => s.kill());
+  const me = (await call(5307, 'GET', '/api/me')).json;
+  assert.equal(me.name, undefined);
+  for (const u of (await call(5307, 'GET', '/api/users')).json) {
+    assert.deepEqual(Object.keys(u).sort(), ['added_by', 'created_at', 'email', 'env_admin', 'role']);
+  }
+  const state = { areas: [], filters: {}, summary: {} };
+  const { id } = (await call(5307, 'POST', '/api/analyses', { title: 'x', state })).json;
+  assert.equal((await call(5307, 'GET', `/api/analyses/${id}`)).json.owner, undefined);
+});
+
+test('every answer carries the security headers, the sign-in redirect included', async (t) => {
+  const s = await start(5308, {});
+  t.after(() => s.kill());
+  const res = await fetch('http://localhost:5308/', { redirect: 'manual' });
+  assert.equal(res.headers.get('x-frame-options'), 'DENY');
+  assert.match(res.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+  assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
+});

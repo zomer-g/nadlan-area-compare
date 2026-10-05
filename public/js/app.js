@@ -1,16 +1,16 @@
-import * as over from './over.js?v=2c39e50ddd';
-import { METRICS, eligible, pointChange, logTrend, indexTo, within } from './stats.js?v=2c39e50ddd';
+import * as over from './over.js?v=55e5d25fcd';
+import { METRICS, eligible, pointChange, logTrend, indexTo, within } from './stats.js?v=55e5d25fcd';
 import {
   markDuplicates,
   SIZE_GROUPS, AGE_GROUPS, OUTLIER_METHODS, SIGMA_K, SIGMA_ROUNDS, SIGMA_MIN_N, PRESCREEN_K, SIGMA_REF_N, REFERENCE_STEPS, FIXED_RANGE, MIN_AMOUNT,
   MIN_YEAR_BUILT, MAX_YEARS_AHEAD, enrich, markOutliers, select, yearly, turnover,
-} from './analysis.js?v=2c39e50ddd';
-import { loadExternal } from './external.js?v=2c39e50ddd';
-import { createBrush } from './brush.js?v=2c39e50ddd';
-import { createParcelLayer } from './parcels.js?v=2c39e50ddd';
-import { buildStatTables, AREA_COLS, SETTLEMENT_COLS } from './statexport.js?v=2c39e50ddd';
-import { createOverlays, OUTLINES, THEMES } from './layers.js?v=2c39e50ddd';
-import { esc } from './util.js?v=2c39e50ddd';
+} from './analysis.js?v=55e5d25fcd';
+import { loadExternal } from './external.js?v=55e5d25fcd';
+import { createBrush } from './brush.js?v=55e5d25fcd';
+import { createParcelLayer } from './parcels.js?v=55e5d25fcd';
+import { buildStatTables, AREA_COLS, SETTLEMENT_COLS } from './statexport.js?v=55e5d25fcd';
+import { createOverlays, OUTLINES, THEMES } from './layers.js?v=55e5d25fcd';
+import { esc } from './util.js?v=55e5d25fcd';
 
 const COLORS = ['#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c', '#0891b2', '#ca8a04', '#db2777'];
 const STORE_KEY = 'nadlan-area-compare:v2';
@@ -1280,7 +1280,7 @@ function renderMethod(list) {
 
   html += `<h3 style="margin-top:1.2rem">מקורות</h3><ul class="small">
     <li><b>OVER (גרסאות לעם)</b> — מאגר העסקאות של רשות המסים${state.register ? ` (${fmt(state.register.deals)} עסקאות, <span class="num">${esc(state.register.first_deal)}</span> עד <span class="num">${esc(state.register.last_deal)}</span>)` : ''}, שכבת החלקות, שכבת השכונות של מפ"י, והאזורים הסטטיסטיים 2022 עם נתוני מפקד 2022 של הלמ"ס. שורות המקור לא עובדו, לא תוקנו ולא הושלמו.</li>
-    ${src ? `<li><b>מקור חוץ: ${esc(src.title)}</b> (התקבל ${esc(src.received)}) — ${esc(src.note)} בשימוש: סיווג מהות לסוג נכס, מיפוי גוש לשכונה (עמודה בחומר הגלם), מאפייני יישובים של הלמ"ס. <a href="https://github.com/zomer-g/nadlan-area-compare/tree/master/data/external" target="_blank" rel="noopener">הטבלאות והבדיקה שלהן</a>.</li>` : ''}
+    ${src ? `<li><b>מקור חוץ: ${esc(src.title)}</b> (התקבל ${esc(src.received)}) — ${esc(src.note)} בשימוש: סיווג מהות לסוג נכס, מיפוי גוש לשכונה (עמודה בחומר הגלם), מאפייני יישובים של הלמ"ס. <a href="https://github.com/zomer-g/nadlan-area-compare/tree/master/public/data/external" target="_blank" rel="noopener">הטבלאות והבדיקה שלהן</a>.</li>` : ''}
   </ul>
   <h3>הסתייגויות</h3><ul class="small">
     <li>המאגר אינו מפרסם תת-גוש. חלקות שחולקות מספר גוש+חלקה עם תת-גוש שונה עלולות לקבל את אותן עסקאות.</li>
@@ -1395,7 +1395,7 @@ const linkOf = (id) => `${location.origin}/?analysis=${encodeURIComponent(id)}`;
 function showCurrent() {
   const c = state.current;
   $('#current-analysis').innerHTML = c
-    ? `ניתוח פתוח: <b>${esc(c.title)}</b>${c.mine ? '' : ` <span class="muted">(של ${esc(c.owner)})</span>`}
+    ? `ניתוח פתוח: <b>${esc(c.title)}</b>${c.mine ? '' : ` <span class="muted">(ניתוח ששותף איתך)</span>`}
        <button type="button" class="small-btn" data-copy="${esc(c.id)}">🔗 העתק קישור</button>`
     : '<span class="muted">הניתוח הנוכחי לא נשמר.</span>';
 }
@@ -1419,7 +1419,7 @@ async function renderSaved() {
 async function openAnalysis(id) {
   try {
     const a = await api('GET', `/api/analyses/${encodeURIComponent(id)}`);
-    state.current = { id: a.id, title: a.title, owner: a.owner, mine: a.mine };
+    state.current = { id: a.id, title: a.title, mine: a.mine };
     applySnapshot(a.state);
     history.replaceState(null, '', `?analysis=${encodeURIComponent(a.id)}`);
     showCurrent();

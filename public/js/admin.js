@@ -1,5 +1,5 @@
 // User management: list, add, change role, approve pending, remove.
-import { esc } from './util.js?v=2c39e50ddd';
+import { esc } from './util.js?v=55e5d25fcd';
 
 const $ = (s) => document.querySelector(s);
 const ROLE = { admin: 'אדמין', viewer: 'צפייה', pending: 'ממתין לאישור', blocked: 'חסום' };
@@ -18,11 +18,11 @@ async function load() {
   const order = { pending: 0, admin: 1, viewer: 2, blocked: 3 };
   users.sort((a, b) => order[a.role] - order[b.role] || a.email.localeCompare(b.email));
   $('#users').innerHTML = users.map((u) => `<tr data-email="${esc(u.email)}">
-    <td>${esc(u.email)}</td><td>${esc(u.name)}</td>
+    <td>${esc(u.email)}</td>
     <td>${u.env_admin ? `${ROLE.admin} <span class="muted">(ENV)</span>` : `<select data-role>
       ${['pending', 'viewer', 'admin', 'blocked'].map((r) => `<option value="${r}" ${u.role === r ? 'selected' : ''} ${r === 'pending' ? 'disabled' : ''}>${ROLE[r]}</option>`).join('')}
     </select>`}</td>
-    <td>${esc(u.added_by || '')}</td><td>${when(u.last_seen)}</td>
+    <td>${esc(u.added_by || '')}</td><td>${when(u.created_at)}</td>
     <td>${u.env_admin ? '' : `${u.role === 'pending' ? '<button type="button" data-approve>אשר לצפייה</button> ' : ''}<button type="button" data-del>הסר</button>`}</td>
   </tr>`).join('');
 }

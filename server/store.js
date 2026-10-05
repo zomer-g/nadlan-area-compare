@@ -1,5 +1,8 @@
 // Users, roles and saved analyses.
 //
+// What is kept about a person: their email, role, who set the role, and when
+// the row was created. Nothing else — no name, no activity log, no last visit.
+//
 // Postgres from DATABASE_URL (xhostd injects it into every non-static channel).
 // Without it — local development only — an in-memory store with the same
 // interface, which forgets everything on restart.
@@ -27,10 +30,8 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   email       text PRIMARY KEY,
   role        text NOT NULL,
-  name        text NOT NULL DEFAULT '',
   added_by    text,
-  created_at  timestamptz NOT NULL DEFAULT now(),
-  last_seen   timestamptz
+  created_at  timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS analyses (
   id          text PRIMARY KEY,
@@ -53,13 +54,12 @@ function pgStore(url) {
     kind: 'postgres',
     async init() { await pool.query(SCHEMA); },
     async getUser(email) { return (await q('SELECT * FROM users WHERE email = $1', [email]))[0] || null; },
-    async touch(email, name) {
+    async addPending(email) {
       // A first visit by someone without access leaves a 'pending' row, so the
-      // admin sees who asked instead of being told by mail.
-      await q(`INSERT INTO users (email, role, name, last_seen) VALUES ($1, 'pending', $2, now())
-               ON CONFLICT (email) DO UPDATE SET last_seen = now(), name = CASE WHEN users.name = '' THEN EXCLUDED.name ELSE users.name END`, [email, name || '']);
+      // admin sees who asked instead of being told by mail. Written once.
+      await q(`INSERT INTO users (email, role) VALUES ($1, 'pending') ON CONFLICT (email) DO NOTHING`, [email]);
     },
-    listUsers() { return q('SELECT * FROM users ORDER BY role, email'); },
+    listUsers() { return q('SELECT email, role, added_by, created_at FROM users ORDER BY role, email'); },
     async setUser(email, role, by) {
       await q(`INSERT INTO users (email, role, added_by) VALUES ($1, $2, $3)
                ON CONFLICT (email) DO UPDATE SET role = EXCLUDED.role, added_by = EXCLUDED.added_by`, [email, role, by]);
@@ -90,13 +90,12 @@ function memoryStore() {
     kind: 'memory',
     async init() {},
     async getUser(email) { return users.get(email) || null; },
-    async touch(email, name) {
-      const u = users.get(email);
-      if (u) { u.last_seen = now(); if (!u.name) u.name = name || ''; } else users.set(email, { email, role: 'pending', name: name || '', added_by: null, created_at: now(), last_seen: now() });
+    async addPending(email) {
+      if (!users.has(email)) users.set(email, { email, role: 'pending', added_by: null, created_at: now() });
     },
     async listUsers() { return [...users.values()]; },
     async setUser(email, role, by) {
-      const u = users.get(email) || { email, name: '', created_at: now(), last_seen: null };
+      const u = users.get(email) || { email, created_at: now() };
       users.set(email, { ...u, role, added_by: by });
     },
     async deleteUser(email) { users.delete(email); },

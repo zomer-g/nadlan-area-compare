@@ -21,6 +21,19 @@ app.set('trust proxy', true);
 app.disable('x-powered-by');
 app.use(compression()); // tiles and the deals payload are JSON: ~5x smaller
 
+// Security headers on every answer, the sign-in redirect included. No framing
+// (clickjacking of the admin page); the referrer policy keeps the browser
+// default explicit — OSM's tile servers require a Referer, and it sends them
+// only the origin, never a shared link's path.
+app.use((req, res, next) => {
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Content-Security-Policy', "frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'");
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Strict-Transport-Security', 'max-age=31536000');
+  next();
+});
+
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 // Only a page navigation (Accept: text/html) is sent to sign in; scripts, tiles
 // and API calls get a plain 401.
@@ -50,7 +63,7 @@ app.use(safe(async (req, res, next) => {
   }
   const row = await store.getUser(who.email);
   let role = roleOf(who.email, row);
-  await store.touch(who.email, who.name).catch(() => {});
+  if (!row) await store.addPending(who.email);
   // Open sign-up: a signed-in user with no role (new, or left pending from
   // before sign-up was opened) becomes a viewer now. Never a blocked one.
   if (!role && OPEN_SIGNUP) {
@@ -83,13 +96,13 @@ const validEmail = (e) => typeof e === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.
 
 // ── API ─────────────────────────────────────────────────────────────────────
 app.get('/api/me', (req, res) => {
-  res.json({ email: req.user.email, name: req.user.name, role: req.user.role, logout: LOGOUT_URL, store: store.kind, open_signup: OPEN_SIGNUP });
+  res.json({ email: req.user.email, role: req.user.role, logout: LOGOUT_URL, store: store.kind, open_signup: OPEN_SIGNUP });
 });
 
 app.get('/api/users', adminOnly, safe(async (req, res) => {
   const rows = await store.listUsers();
   const byEmail = new Map(rows.map((u) => [u.email, u]));
-  for (const e of ENV_ADMINS) if (!byEmail.has(e)) byEmail.set(e, { email: e, role: 'admin', name: '', created_at: null, last_seen: null });
+  for (const e of ENV_ADMINS) if (!byEmail.has(e)) byEmail.set(e, { email: e, role: 'admin', added_by: null, created_at: null });
   res.json([...byEmail.values()].map((u) => ({ ...u, role: roleOf(u.email, u) || 'pending', env_admin: ENV_ADMINS.has(u.email) })));
 }));
 
@@ -112,7 +125,8 @@ app.delete('/api/users/:email', adminOnly, safe(async (req, res) => {
 }));
 
 // Saved analyses. Listing is per owner ("my analyses"); opening one by id is
-// open to every user with access — that is what a shared link is.
+// open to every user with access — that is what a shared link is. A shared
+// link does not reveal who saved it: the reply says only whether it is yours.
 const validState = (s) => s && typeof s === 'object' && Array.isArray(s.areas) && s.areas.length <= 50;
 const cleanTitle = (t) => String(t || '').trim().slice(0, 120) || 'ניתוח ללא שם';
 
@@ -121,7 +135,7 @@ app.get('/api/analyses', safe(async (req, res) => res.json(await store.listAnaly
 app.get('/api/analyses/:id', safe(async (req, res) => {
   const a = await store.getAnalysis(String(req.params.id));
   if (!a) return res.status(404).json({ error: 'not found' });
-  res.json({ id: a.id, title: a.title, owner: a.owner, state: a.state, created_at: a.created_at, updated_at: a.updated_at, mine: a.owner === req.user.email });
+  res.json({ id: a.id, title: a.title, state: a.state, created_at: a.created_at, updated_at: a.updated_at, mine: a.owner === req.user.email });
 }));
 
 app.post('/api/analyses', safe(async (req, res) => {
