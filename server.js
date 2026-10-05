@@ -160,5 +160,6 @@ app.use(express.static(ROOT, {
   },
 }));
 
-const port = Number(process.env.XHOST_HTTP_PORT || process.env.PORT || 5190);
+// xhostd renamed XHOST_* to XHOSTD_* (2026-10); the old name and PORT stay as fallbacks.
+const port = Number(process.env.XHOSTD_HTTP_PORT || process.env.XHOST_HTTP_PORT || process.env.PORT || 5190);
 app.listen(port, '0.0.0.0', () => console.log(`listening on 0.0.0.0:${port} (store: ${store.kind}, env admins: ${ENV_ADMINS.size}, open sign-up: ${OPEN_SIGNUP})`));
