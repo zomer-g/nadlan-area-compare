@@ -19,11 +19,22 @@ export function getDealsTable() {
   return dealsTable;
 }
 
-async function getJson(url, opts) {
+// Every request to OVER gives up after a while: when its API hangs (seen
+// 2026-10-05, its server stopped) a fetch would otherwise wait forever and the
+// page would say "loading" indefinitely. A caller's own signal still wins.
+export const OVER_TIMEOUT_MS = 45000;
+export class OverTimeout extends Error {}
+
+async function getJson(url, opts = {}) {
+  const timer = AbortSignal.timeout(OVER_TIMEOUT_MS);
+  const signal = opts.signal ? AbortSignal.any([opts.signal, timer]) : timer;
   let res;
   try {
-    res = await fetch(url, opts);
+    res = await fetch(url, { ...opts, signal });
   } catch (e) {
+    if (timer.aborted && !opts.signal?.aborted) {
+      throw new OverTimeout(`OVER (over.org.il) לא מגיב כרגע — לא התקבלה תשובה תוך ${OVER_TIMEOUT_MS / 1000} שניות. הנתונים נשלפים ממנו בזמן אמת, לכן צריך לחכות שיחזור.`);
+    }
     if (e.name === 'AbortError') throw e;
     throw new Error('אין תקשורת עם OVER: ' + e.message);
   }

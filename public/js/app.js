@@ -1,16 +1,16 @@
-import * as over from './over.js?v=ac1e29f923';
-import { METRICS, eligible, pointChange, logTrend, indexTo, within } from './stats.js?v=ac1e29f923';
+import * as over from './over.js?v=2c39e50ddd';
+import { METRICS, eligible, pointChange, logTrend, indexTo, within } from './stats.js?v=2c39e50ddd';
 import {
   markDuplicates,
   SIZE_GROUPS, AGE_GROUPS, OUTLIER_METHODS, SIGMA_K, SIGMA_ROUNDS, SIGMA_MIN_N, PRESCREEN_K, SIGMA_REF_N, REFERENCE_STEPS, FIXED_RANGE, MIN_AMOUNT,
   MIN_YEAR_BUILT, MAX_YEARS_AHEAD, enrich, markOutliers, select, yearly, turnover,
-} from './analysis.js?v=ac1e29f923';
-import { loadExternal } from './external.js?v=ac1e29f923';
-import { createBrush } from './brush.js?v=ac1e29f923';
-import { createParcelLayer } from './parcels.js?v=ac1e29f923';
-import { buildStatTables, AREA_COLS, SETTLEMENT_COLS } from './statexport.js?v=ac1e29f923';
-import { createOverlays, OUTLINES, THEMES } from './layers.js?v=ac1e29f923';
-import { esc } from './util.js?v=ac1e29f923';
+} from './analysis.js?v=2c39e50ddd';
+import { loadExternal } from './external.js?v=2c39e50ddd';
+import { createBrush } from './brush.js?v=2c39e50ddd';
+import { createParcelLayer } from './parcels.js?v=2c39e50ddd';
+import { buildStatTables, AREA_COLS, SETTLEMENT_COLS } from './statexport.js?v=2c39e50ddd';
+import { createOverlays, OUTLINES, THEMES } from './layers.js?v=2c39e50ddd';
+import { esc } from './util.js?v=2c39e50ddd';
 
 const COLORS = ['#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c', '#0891b2', '#ca8a04', '#db2777'];
 const STORE_KEY = 'nadlan-area-compare:v2';
@@ -616,7 +616,9 @@ async function compute() {
     return;
   }
   if (!state.natureList.length || !state.ext) {
-    setStatus('רשימת סוגי העסקאות עדיין נטענת — נסו שוב בעוד רגע.');
+    setStatus(state.typesError
+      ? `אי אפשר לחשב: ${state.typesError}`
+      : 'רשימת סוגי העסקאות עדיין נטענת מ-OVER — נסו שוב בעוד רגע.');
     return;
   }
   const f = state.filters;
@@ -1311,19 +1313,23 @@ async function retry(fn, tries = 4) {
     try {
       return await fn();
     } catch (e) {
-      if (i >= tries - 1) throw e;
+      // A timeout already waited long enough: report it rather than wait 4x.
+      if (i >= tries - 1 || e instanceof over.OverTimeout) throw e;
       await new Promise((r) => setTimeout(r, 1000 * 2 ** i));
     }
   }
 }
 function loadTypes() {
   $('#types').innerHTML = '<p class="muted small">טוען…</p>';
+  state.typesError = null;
   Promise.all([retry(() => over.natures()), retry(() => loadExternal())]).then(([list, ext]) => {
+    state.typesError = null;
     state.natureList = list;
     state.ext = ext;
     renderTypes();
     if (state.computeWhenReady) { state.computeWhenReady = false; compute(); }
   }).catch((e) => {
+    state.typesError = e.message;
     $('#types').innerHTML = `<p class="neg small">טעינת סוגי העסקאות נכשלה: ${esc(e.message)}</p>
       <button type="button" id="types-retry" class="small-btn">נסו שוב</button>`;
     $('#types-retry').onclick = loadTypes;
