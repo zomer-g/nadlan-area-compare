@@ -1,16 +1,16 @@
-import * as over from './over.js?v=55e5d25fcd';
-import { METRICS, eligible, pointChange, logTrend, indexTo, within } from './stats.js?v=55e5d25fcd';
+import * as over from './over.js?v=2be24d611e';
+import { METRICS, eligible, pointChange, logTrend, indexTo, within } from './stats.js?v=2be24d611e';
 import {
   markDuplicates,
   SIZE_GROUPS, AGE_GROUPS, OUTLIER_METHODS, SIGMA_K, SIGMA_ROUNDS, SIGMA_MIN_N, PRESCREEN_K, SIGMA_REF_N, REFERENCE_STEPS, FIXED_RANGE, MIN_AMOUNT,
   MIN_YEAR_BUILT, MAX_YEARS_AHEAD, enrich, markOutliers, select, yearly, turnover,
-} from './analysis.js?v=55e5d25fcd';
-import { loadExternal } from './external.js?v=55e5d25fcd';
-import { createBrush } from './brush.js?v=55e5d25fcd';
-import { createParcelLayer } from './parcels.js?v=55e5d25fcd';
-import { buildStatTables, AREA_COLS, SETTLEMENT_COLS } from './statexport.js?v=55e5d25fcd';
-import { createOverlays, OUTLINES, THEMES } from './layers.js?v=55e5d25fcd';
-import { esc } from './util.js?v=55e5d25fcd';
+} from './analysis.js?v=2be24d611e';
+import { loadExternal } from './external.js?v=2be24d611e';
+import { createBrush } from './brush.js?v=2be24d611e';
+import { createParcelLayer } from './parcels.js?v=2be24d611e';
+import { buildStatTables, AREA_COLS, SETTLEMENT_COLS } from './statexport.js?v=2be24d611e';
+import { createOverlays, OUTLINES, THEMES } from './layers.js?v=2be24d611e';
+import { esc } from './util.js?v=2be24d611e';
 
 const COLORS = ['#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c', '#0891b2', '#ca8a04', '#db2777'];
 const STORE_KEY = 'nadlan-area-compare:v2';
@@ -1295,7 +1295,6 @@ function renderMethod(list) {
 load();
 writeFilters();
 renderAreas();
-initAccount();
 const withGeom = state.areas.filter((a) => a.geom);
 if (withGeom.length) map.fitBounds(L.featureGroup(withGeom.map((a) => a.layer)).getBounds(), { padding: [30, 30] });
 
@@ -1337,13 +1336,16 @@ function loadTypes() {
 }
 loadTypes();
 
-// ── account, saved analyses and shared links ───────────────────────────────
-// Served by server.js behind xhostd sign-in. A saved analysis is a snapshot of
-// the areas, filters and map view; its link (?analysis=<id>) opens it for any
-// user with access. Without the server (a plain static preview) this section
-// stays hidden.
+// ── saved analyses and shared links ─────────────────────────────────────────
+// The site needs no sign-in. Favourites are kept in this browser
+// (localStorage), and a shared link carries the analysis itself, compressed,
+// after the "#" — the part of a URL that browsers never send to a server. So
+// nothing about the viewer is stored anywhere but their own browser.
+// Analyses saved to an account before the site was opened still open by their
+// ?analysis=<id> link, and their owner sees them here after signing in.
 
-const ROLE_LABEL = { admin: 'אדמין', viewer: 'צפייה' };
+const SAVED_KEY = 'nadlan-area-compare:saved:v1';
+const LINK_PREFIX = '#s=';
 
 async function api(method, url, body) {
   const res = await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined });
@@ -1390,36 +1392,108 @@ function applySnapshot(s) {
   else state.computeWhenReady = true;
 }
 
-const linkOf = (id) => `${location.origin}/?analysis=${encodeURIComponent(id)}`;
+// Favourites in this browser. Writing can throw (storage full, or blocked in
+// a private window); the caller says so.
+function readSaved() {
+  try {
+    const v = JSON.parse(localStorage.getItem(SAVED_KEY) || '[]');
+    return Array.isArray(v) ? v.filter((x) => x && typeof x.id === 'string' && x.state) : [];
+  } catch {
+    return [];
+  }
+}
+const writeSaved = (list) => localStorage.setItem(SAVED_KEY, JSON.stringify(list));
 
-function showCurrent() {
-  const c = state.current;
-  $('#current-analysis').innerHTML = c
-    ? `ניתוח פתוח: <b>${esc(c.title)}</b>${c.mine ? '' : ` <span class="muted">(ניתוח ששותף איתך)</span>`}
-       <button type="button" class="small-btn" data-copy="${esc(c.id)}">🔗 העתק קישור</button>`
-    : '<span class="muted">הניתוח הנוכחי לא נשמר.</span>';
+// A shared link: {t: title, s: snapshot} as JSON, deflated, base64url.
+// Coordinates are rounded to 5 decimals (~1 m) to keep the link short.
+const round5 = (c) => (typeof c[0] === 'number' ? c.map((v) => Math.round(v * 1e5) / 1e5) : c.map(round5));
+function toBase64url(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+const fromBase64url = (str) => Uint8Array.from(atob(str.replace(/-/g, '+').replace(/_/g, '/')), (ch) => ch.charCodeAt(0));
+
+async function packLink(title, s) {
+  const slim = {
+    ...s,
+    summary: undefined,
+    areas: s.areas.map((a) => (a.geom
+      ? { ...a, geom: { type: 'Feature', properties: {}, geometry: { type: a.geom.geometry.type, coordinates: round5(a.geom.geometry.coordinates) } } }
+      : a)),
+  };
+  const stream = new Blob([JSON.stringify({ t: title, s: slim })]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+  return `${location.origin}${location.pathname}${LINK_PREFIX}${toBase64url(new Uint8Array(await new Response(stream).arrayBuffer()))}`;
+}
+async function unpackLink(hash) {
+  const stream = new Blob([fromBase64url(hash.slice(LINK_PREFIX.length))]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  const v = JSON.parse(await new Response(stream).text());
+  if (!v || typeof v.s !== 'object') throw new Error('קישור לא תקין');
+  return { title: typeof v.t === 'string' ? v.t.slice(0, 120) : 'ניתוח משותף', state: v.s };
 }
 
-async function renderSaved() {
-  const ul = $('#saved');
+async function copyText(url, note) {
   try {
-    const list = await api('GET', '/api/analyses');
-    ul.innerHTML = list.length ? list.map((a) => `<li>
-      <button type="button" class="link" data-open="${esc(a.id)}" title="${esc((a.summary?.areas || []).join(' · '))}">${esc(a.title)}</button>
-      <span class="muted small">${new Date(a.updated_at).toLocaleDateString('he-IL')}</span>
-      <span class="acts">
-        <button type="button" data-copy="${esc(a.id)}" title="העתק קישור לשיתוף">🔗</button>
-        <button type="button" data-del-analysis="${esc(a.id)}" title="מחק">✖</button>
-      </span></li>`).join('') : '<li class="muted small">עוד לא שמרת ניתוחים.</li>';
+    await navigator.clipboard.writeText(url);
+    setStatus(note);
+  } catch {
+    prompt('העתיקו את הקישור:', url);
+  }
+}
+async function copyLink(title, s) {
+  try {
+    const url = await packLink(title, s);
+    const long = url.length > 8000 ? ` הקישור ארוך (${fmt(url.length)} תווים) כי הוא מכיל את גבולות האזורים.` : '';
+    await copyText(url, `הקישור הועתק. הוא נפתח לכל אחד, בלי כניסה, ומכיל את האזורים והסינון עצמם.${long}`);
   } catch (e) {
-    ul.innerHTML = `<li class="neg small">${esc(e.message)}</li>`;
+    setStatus(`לא ניתן ליצור קישור: ${e.message}`);
   }
 }
 
-async function openAnalysis(id) {
+function showCurrent() {
+  const c = state.current;
+  const label = !c ? '<span class="muted">הניתוח הנוכחי לא נשמר.</span>'
+    : `ניתוח פתוח: <b>${esc(c.title)}</b>${c.kind === 'link' ? ' <span class="muted">(מקישור ששותף איתך)</span>' : ''}`;
+  $('#current-analysis').innerHTML = `${label}
+    <button type="button" class="small-btn" data-copy-current title="קישור לניתוח כפי שהוא עכשיו על המסך">🔗 העתק קישור</button>`;
+}
+
+const savedItem = (a, kind) => `<li>
+  <button type="button" class="link" data-open="${esc(a.id)}" data-kind="${kind}" title="${esc((a.summary?.areas || a.state?.summary?.areas || []).join(' · '))}">${esc(a.title)}</button>
+  <span class="muted small">${new Date(a.updated_at).toLocaleDateString('he-IL')}</span>
+  <span class="acts">
+    <button type="button" data-copy="${esc(a.id)}" data-kind="${kind}" title="העתק קישור לשיתוף">🔗</button>
+    <button type="button" data-del="${esc(a.id)}" data-kind="${kind}" title="מחק">✖</button>
+  </span></li>`;
+
+async function renderSaved() {
+  const local = readSaved().sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
+  let html = local.length ? local.map((a) => savedItem(a, 'local')).join('') : '<li class="muted small">עוד לא שמרת ניתוחים בדפדפן הזה.</li>';
+  if (state.me?.signed_in) {
+    try {
+      const acct = await api('GET', '/api/analyses');
+      if (acct.length) html += `<li class="muted small saved-head">שמורים בחשבון (מלפני שהאתר נפתח לכולם):</li>${acct.map((a) => savedItem(a, 'account')).join('')}`;
+    } catch (e) {
+      html += `<li class="neg small">${esc(e.message)}</li>`;
+    }
+  }
+  $('#saved').innerHTML = html;
+}
+
+function openLocal(id) {
+  const a = readSaved().find((x) => x.id === id);
+  if (!a) return;
+  state.current = { kind: 'local', id: a.id, title: a.title };
+  applySnapshot(a.state);
+  history.replaceState(null, '', location.pathname);
+  showCurrent();
+  setStatus(`נפתח: ${a.title}`);
+}
+
+async function openAccount(id) {
   try {
     const a = await api('GET', `/api/analyses/${encodeURIComponent(id)}`);
-    state.current = { id: a.id, title: a.title, mine: a.mine };
+    state.current = { kind: 'account', id: a.id, title: a.title, mine: a.mine };
     applySnapshot(a.state);
     history.replaceState(null, '', `?analysis=${encodeURIComponent(a.id)}`);
     showCurrent();
@@ -1429,65 +1503,98 @@ async function openAnalysis(id) {
   }
 }
 
-async function saveAnalysis(asNew) {
+function saveAnalysis(asNew) {
   const c = state.current;
   const title = prompt('שם לניתוח:', c && !asNew ? c.title : state.areas.map((a) => a.name).join(' מול ').slice(0, 100));
   if (title == null) return;
-  try {
-    if (c && c.mine && !asNew) {
-      await api('PUT', `/api/analyses/${encodeURIComponent(c.id)}`, { title, state: snapshot() });
-      c.title = title;
-    } else {
-      const { id } = await api('POST', '/api/analyses', { title, state: snapshot() });
-      state.current = { id, title, mine: true };
-      history.replaceState(null, '', `?analysis=${encodeURIComponent(id)}`);
-    }
-    showCurrent();
-    renderSaved();
-    setStatus(`נשמר: ${title}`);
-  } catch (e) {
-    setStatus(`השמירה נכשלה: ${e.message}`);
+  const clean = title.trim().slice(0, 120) || 'ניתוח ללא שם';
+  const list = readSaved();
+  const now = new Date().toISOString();
+  let entry = c?.kind === 'local' && !asNew ? list.find((x) => x.id === c.id) : null;
+  if (entry) Object.assign(entry, { title: clean, state: snapshot(), updated_at: now });
+  else {
+    entry = { id: crypto.randomUUID(), title: clean, state: snapshot(), created_at: now, updated_at: now };
+    list.push(entry);
   }
-}
-
-async function copyLink(id) {
-  const url = linkOf(id);
   try {
-    await navigator.clipboard.writeText(url);
-    setStatus('הקישור הועתק. הוא נפתח לכל מי שיש לו גישה לאתר.');
+    writeSaved(list);
   } catch {
-    prompt('העתיקו את הקישור:', url);
+    setStatus('הדפדפן לא שמר את הניתוח (האחסון מלא, או חסום בחלון פרטי).');
+    return;
   }
-}
-
-async function initAccount() {
-  let me;
-  try {
-    me = await api('GET', '/api/me');
-  } catch {
-    return; // no server (static preview): no accounts
-  }
-  $('#userbar').innerHTML = `${esc(me.email)} · ${ROLE_LABEL[me.role] || esc(me.role)}
-    ${me.role === 'admin' ? ' · <a href="/admin">ניהול משתמשים</a>' : ''} · <a href="${esc(me.logout)}">התנתקות</a>`;
-  $('#saved-panel').hidden = false;
+  state.current = { kind: 'local', id: entry.id, title: clean };
   showCurrent();
   renderSaved();
+  setStatus(`נשמר בדפדפן הזה: ${clean}`);
+}
+
+async function onSavedClick(e) {
+  const t = e.target.closest('button');
+  if (!t) return;
+  const { kind } = t.dataset;
+  if (t.dataset.copyCurrent !== undefined) {
+    copyLink(state.current?.title || state.areas.map((a) => a.name).join(' מול ').slice(0, 100), snapshot());
+  } else if (t.dataset.open) {
+    if (kind === 'local') openLocal(t.dataset.open);
+    else openAccount(t.dataset.open);
+  } else if (t.dataset.copy) {
+    if (kind === 'local') {
+      const a = readSaved().find((x) => x.id === t.dataset.copy);
+      if (a) copyLink(a.title, a.state);
+    } else {
+      copyText(`${location.origin}/?analysis=${encodeURIComponent(t.dataset.copy)}`, 'הקישור הועתק. הוא נפתח לכל אחד, בלי כניסה.');
+    }
+  } else if (t.dataset.del) {
+    const id = t.dataset.del;
+    if (kind === 'local') {
+      if (!confirm('למחוק את הניתוח מהרשימה בדפדפן הזה? קישורים ששלחת ימשיכו לעבוד, כי הם מכילים את הניתוח עצמו.')) return;
+      try { writeSaved(readSaved().filter((x) => x.id !== id)); } catch { /* storage blocked: nothing to delete */ }
+    } else {
+      if (!confirm('למחוק את הניתוח מהחשבון? מי שקיבל קישור אליו לא יוכל לפתוח אותו.')) return;
+      try { await api('DELETE', `/api/analyses/${encodeURIComponent(id)}`); } catch (err) { setStatus(err.message); return; }
+    }
+    if (state.current?.id === id) { state.current = null; history.replaceState(null, '', location.pathname); showCurrent(); }
+    renderSaved();
+  }
+}
+
+async function initSaved() {
+  $('#saved-panel').hidden = false;
   $('#save-analysis').onclick = () => saveAnalysis(false);
   $('#save-new').onclick = () => saveAnalysis(true);
-  $('#saved-panel').addEventListener('click', async (e) => {
-    const t = e.target.closest('button');
-    if (!t) return;
-    if (t.dataset.open) openAnalysis(t.dataset.open);
-    else if (t.dataset.copy) copyLink(t.dataset.copy);
-    else if (t.dataset.delAnalysis) {
-      if (!confirm('למחוק את הניתוח השמור? מי שקיבל קישור אליו לא יוכל לפתוח אותו.')) return;
-      try {
-        await api('DELETE', `/api/analyses/${encodeURIComponent(t.dataset.delAnalysis)}`);
-        if (state.current?.id === t.dataset.delAnalysis) { state.current = null; history.replaceState(null, '', location.pathname); showCurrent(); }
-        renderSaved();
-      } catch (err) { setStatus(err.message); }
+  $('#saved-panel').addEventListener('click', onSavedClick);
+  showCurrent();
+  renderSaved();
+
+  // A shared link (#s=…) or an analysis saved to an account (?analysis=<id>).
+  if (location.hash.startsWith(LINK_PREFIX)) {
+    try {
+      const { title, state: s } = await unpackLink(location.hash);
+      state.current = { kind: 'link', title };
+      applySnapshot(s);
+      showCurrent();
+      setStatus(`נפתח מקישור: ${title}. כדי לשמור אותו אצלך, לחצו "שמור".`);
+    } catch {
+      setStatus('הקישור פגום או חלקי — ייתכן שהוא נחתך בהעתקה.');
     }
-  });
-  const id = new URLSearchParams(location.search).get('analysis');
-  if (id) openAnalysis(id);
+    history.replaceState(null, '', location.pathname);
+  } else {
+    const id = new URLSearchParams(location.search).get('analysis');
+    if (id) openAccount(id);
+  }
+
+  // Sign-in is optional: for admins, and for analyses saved to an account.
+  try {
+    state.me = await api('GET', '/api/me');
+  } catch {
+    return; // no server (a plain static preview)
+  }
+  const me = state.me;
+  $('#userbar').innerHTML = me.signed_in
+    ? `${esc(me.email)}${me.role === 'admin' ? ' · <a href="/admin">ניהול משתמשים</a>' : ''} · <a href="${esc(me.logout)}">התנתקות</a>`
+    : `<a href="${esc(me.login)}" title="אין צורך בכניסה כדי להשתמש באתר. היא נדרשת רק לניהול, או לניתוחים שנשמרו בחשבון לפני שהאתר נפתח לכולם.">כניסה למנהלים</a>`;
+  if (me.signed_in) renderSaved();
 }
+
+// Last: it reads the constants above.
+initSaved();

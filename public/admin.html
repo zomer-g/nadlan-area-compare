@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ניהול משתמשים</title>
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
-  <link rel="stylesheet" href="css/style.css?v=55e5d25fcd">
+  <link rel="stylesheet" href="css/style.css?v=2be24d611e">
 </head>
 <body>
   <header class="top">
@@ -21,14 +21,12 @@
       <form id="add" class="row" style="flex-wrap:wrap">
         <input id="email" type="email" placeholder="name@gmail.com" required style="max-width:280px">
         <select id="role" style="max-width:140px">
-          <option value="viewer">צפייה</option>
           <option value="admin">אדמין</option>
-          <option value="blocked">חסום</option>
+          <option value="viewer">רגיל</option>
         </select>
         <button type="submit">הוסף / עדכן</button>
       </form>
-      <p class="note small" id="signup-mode"></p>
-      <p class="muted small">הכניסה היא בחשבון Google (דרך xhostd). "צפייה" = שימוש מלא באתר, שמירת ניתוחים ושיתוף. "אדמין" = גם ניהול משתמשים. "חסום" = אין גישה.</p>
+      <p class="muted small">האתר פתוח לכולם, בלי כניסה. הכניסה (חשבון Google דרך xhostd) נדרשת רק לניהול: "אדמין" = ניהול משתמשים. "רגיל" = חשבון בלי הרשאות ניהול (למשל מי ששמר ניתוחים בחשבון לפני שהאתר נפתח). כניסה לא יוצרת רשומה; רק מי שנוסף כאן נשמר.</p>
       <p id="msg" class="small" aria-live="polite"></p>
     </section>
     <section class="panel">
@@ -39,6 +37,6 @@
       </table></div>
     </section>
   </main>
-  <script type="module" src="js/admin.js?v=55e5d25fcd"></script>
+  <script type="module" src="js/admin.js?v=2be24d611e"></script>
 </body>
 </html>

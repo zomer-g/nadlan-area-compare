@@ -1,8 +1,9 @@
-// User management: list, add, change role, approve pending, remove.
-import { esc } from './util.js?v=55e5d25fcd';
+// User management: list, add, change role, remove. The site is open to all;
+// what a role grants is admin access to this page.
+import { esc } from './util.js?v=2be24d611e';
 
 const $ = (s) => document.querySelector(s);
-const ROLE = { admin: 'אדמין', viewer: 'צפייה', pending: 'ממתין לאישור', blocked: 'חסום' };
+const ROLE = { admin: 'אדמין', viewer: 'רגיל' };
 const when = (t) => (t ? new Date(t).toLocaleString('he-IL', { dateStyle: 'short', timeStyle: 'short' }) : '—');
 
 async function api(method, url, body) {
@@ -15,15 +16,15 @@ const say = (m, bad) => { $('#msg').textContent = m; $('#msg').className = `smal
 
 async function load() {
   const users = await api('GET', '/api/users');
-  const order = { pending: 0, admin: 1, viewer: 2, blocked: 3 };
+  const order = { admin: 0, viewer: 1 };
   users.sort((a, b) => order[a.role] - order[b.role] || a.email.localeCompare(b.email));
   $('#users').innerHTML = users.map((u) => `<tr data-email="${esc(u.email)}">
     <td>${esc(u.email)}</td>
     <td>${u.env_admin ? `${ROLE.admin} <span class="muted">(ENV)</span>` : `<select data-role>
-      ${['pending', 'viewer', 'admin', 'blocked'].map((r) => `<option value="${r}" ${u.role === r ? 'selected' : ''} ${r === 'pending' ? 'disabled' : ''}>${ROLE[r]}</option>`).join('')}
+      ${['admin', 'viewer'].map((r) => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${ROLE[r]}</option>`).join('')}
     </select>`}</td>
     <td>${esc(u.added_by || '')}</td><td>${when(u.created_at)}</td>
-    <td>${u.env_admin ? '' : `${u.role === 'pending' ? '<button type="button" data-approve>אשר לצפייה</button> ' : ''}<button type="button" data-del>הסר</button>`}</td>
+    <td>${u.env_admin ? '' : '<button type="button" data-del>הסר</button>'}</td>
   </tr>`).join('');
 }
 
@@ -37,11 +38,8 @@ $('#users').addEventListener('change', async (e) => {
 $('#users').addEventListener('click', async (e) => {
   const email = e.target.closest('tr')?.dataset.email;
   try {
-    if (e.target.matches('[data-approve]')) {
-      await api('POST', '/api/users', { email, role: 'viewer' });
-      say(`${email} אושר לצפייה`);
-    } else if (e.target.matches('[data-del]')) {
-      if (!confirm(`להסיר את ${email}?${openSignup ? '\nההרשמה פתוחה, אז בכניסה הבאה הוא יירשם מחדש כצופה. כדי למנוע גישה בחרו "חסום".' : ''}`)) return;
+    if (e.target.matches('[data-del]')) {
+      if (!confirm(`להסיר את ${email}?`)) return;
       await api('DELETE', `/api/users/${encodeURIComponent(email)}`);
       say(`${email} הוסר`);
     } else return;
@@ -58,12 +56,7 @@ $('#add').onsubmit = async (e) => {
   load();
 };
 
-let openSignup = false;
 api('GET', '/api/me').then((me) => {
-  openSignup = Boolean(me.open_signup);
   $('#me').innerHTML = `${esc(me.email)} · ${ROLE[me.role]}<br><a href="${esc(me.logout)}">התנתקות</a>`;
-  $('#signup-mode').textContent = openSignup
-    ? 'ההרשמה פתוחה: כל מי שנכנס עם חשבון Google מקבל אוטומטית הרשאת צפייה. כדי למנוע ממישהו גישה, בחרו לו "חסום".'
-    : 'ההרשמה סגורה: מי שנכנס בלי הרשאה מופיע כ"ממתין" עד שאדמין מאשר אותו.';
 });
 load().catch((err) => say(err.message, true));
