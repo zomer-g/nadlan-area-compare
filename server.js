@@ -124,6 +124,7 @@ app.use('/api', (req, res) => res.status(404).json({ error: 'no such route' }));
 app.get(['/admin', '/admin.html'], adminOnly, (req, res) => res.sendFile(join(ROOT, 'admin.html')));
 app.use(express.static(ROOT, {
   index: 'index.html',
+  extensions: ['html'], // /terms serves terms.html
   setHeaders(res, path) {
     // HTML always revalidates; versioned assets (?v=) and tiles may be cached.
     if (path.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache');

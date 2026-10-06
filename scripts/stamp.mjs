@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
 const jsFiles = readdirSync(join(root, 'js')).filter((f) => f.endsWith('.js')).map((f) => join('js', f));
-const hashed = [...jsFiles, 'css/style.css', 'index.html', 'admin.html'];
+const hashed = [...jsFiles, 'css/style.css', 'index.html', 'admin.html', 'terms.html'];
 
 // Hash the contents with any previous stamps removed, so re-running is stable.
 const unstamp = (s) => s.replace(/\?v=[0-9a-f]{10}/g, '');
@@ -28,7 +28,7 @@ for (const f of jsFiles) {
   const src = unstamp(readFileSync(p, 'utf8'));
   writeFileSync(p, src.replace(/(from\s+'\.\/[\w-]+\.js)'/g, `$1?v=${v}'`));
 }
-for (const [html, script] of [['index.html', 'js/app.js'], ['admin.html', 'js/admin.js']]) {
+for (const [html, script] of [['index.html', 'js/app.js'], ['admin.html', 'js/admin.js'], ['terms.html', null]]) {
   const ip = join(root, html);
   writeFileSync(ip, unstamp(readFileSync(ip, 'utf8'))
     .replace(`src="${script}"`, `src="${script}?v=${v}"`)

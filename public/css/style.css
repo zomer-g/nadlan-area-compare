@@ -172,3 +172,7 @@ summary { cursor: pointer; }
 .saved .acts button { padding: .05rem .3rem; font-size: .8rem; }
 button.link { background: none; border: 0; padding: 0; color: var(--accent); text-align: start; cursor: pointer; }
 main.admin { max-width: 980px; margin: 0 auto; }
+main.doc { max-width: 820px; line-height: 1.65; }
+main.doc h3 { margin: 1rem 0 .3rem; font-size: 1rem; }
+main.doc ul { padding-inline-start: 1.3rem; margin: .3rem 0; }
+main.doc li { margin: .25rem 0; }
