@@ -1,16 +1,16 @@
-import * as over from './over.js?v=2be24d611e';
-import { METRICS, eligible, pointChange, logTrend, indexTo, within } from './stats.js?v=2be24d611e';
+import * as over from './over.js?v=9c9013d9e5';
+import { METRICS, eligible, pointChange, logTrend, indexTo, within } from './stats.js?v=9c9013d9e5';
 import {
   markDuplicates,
   SIZE_GROUPS, AGE_GROUPS, OUTLIER_METHODS, SIGMA_K, SIGMA_ROUNDS, SIGMA_MIN_N, PRESCREEN_K, SIGMA_REF_N, REFERENCE_STEPS, FIXED_RANGE, MIN_AMOUNT,
   MIN_YEAR_BUILT, MAX_YEARS_AHEAD, enrich, markOutliers, select, yearly, turnover,
-} from './analysis.js?v=2be24d611e';
-import { loadExternal } from './external.js?v=2be24d611e';
-import { createBrush } from './brush.js?v=2be24d611e';
-import { createParcelLayer } from './parcels.js?v=2be24d611e';
-import { buildStatTables, AREA_COLS, SETTLEMENT_COLS } from './statexport.js?v=2be24d611e';
-import { createOverlays, OUTLINES, THEMES } from './layers.js?v=2be24d611e';
-import { esc } from './util.js?v=2be24d611e';
+} from './analysis.js?v=9c9013d9e5';
+import { loadExternal } from './external.js?v=9c9013d9e5';
+import { createBrush } from './brush.js?v=9c9013d9e5';
+import { createParcelLayer } from './parcels.js?v=9c9013d9e5';
+import { buildStatTables, AREA_COLS, SETTLEMENT_COLS } from './statexport.js?v=9c9013d9e5';
+import { createOverlays, OUTLINES, THEMES } from './layers.js?v=9c9013d9e5';
+import { esc } from './util.js?v=9c9013d9e5';
 
 const COLORS = ['#2563eb', '#dc2626', '#16a34a', '#9333ea', '#ea580c', '#0891b2', '#ca8a04', '#db2777'];
 const STORE_KEY = 'nadlan-area-compare:v2';
@@ -1592,7 +1592,7 @@ async function initSaved() {
   const me = state.me;
   $('#userbar').innerHTML = me.signed_in
     ? `${esc(me.email)}${me.role === 'admin' ? ' · <a href="/admin">ניהול משתמשים</a>' : ''} · <a href="${esc(me.logout)}">התנתקות</a>`
-    : `<a href="${esc(me.login)}" title="אין צורך בכניסה כדי להשתמש באתר. היא נדרשת רק לניהול, או לניתוחים שנשמרו בחשבון לפני שהאתר נפתח לכולם.">כניסה למנהלים</a>`;
+    : ''; // no sign-in link: admins go to /admin directly
   if (me.signed_in) renderSaved();
 }
 
