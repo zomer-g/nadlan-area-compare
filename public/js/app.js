@@ -640,6 +640,7 @@ async function compute() {
         const sig = JSON.stringify([geometry, natures, f.yearMin, f.yearMax]);
         if (a.res && !a.res.error && a.res.sig === sig) continue;
         setStatus(`מחשב ${i + 1}/${areas.length}: ${a.name}…`);
+        await over.postgisSchema();
         sql = over.dealsSql(geometry, sqlFilters);
         const r = await over.runSql(sql);
         // Edited, cleared or deleted while the query ran: the answer is for a shape that no longer exists.

@@ -69,6 +69,26 @@ export async function natures() {
   return r.data || [];
 }
 
+// The schema PostGIS lives in on OVER's database. It was `extensions` and is
+// moving (to `postgis`), so it is read from the database once and every
+// PostGIS name in the SQL below is qualified with it. Until the lookup
+// answers, or if it fails, the old name is used.
+let gis = 'extensions';
+let gisLookup = null;
+export function postgisSchema() {
+  gisLookup ??= runSql("SELECT extnamespace::regnamespace::text AS schema FROM pg_extension WHERE extname = 'postgis'")
+    .then((r) => {
+      const s = r.rows?.[0]?.schema;
+      if (/^[a-z_][a-z0-9_]*$/.test(s || '')) gis = s; // goes into SQL unquoted
+      return gis;
+    })
+    .catch(() => {
+      gisLookup = null; // try again on the next query
+      return gis;
+    });
+  return gisLookup;
+}
+
 export async function runSql(sql) {
   return getJson(`${OVER}/api/append/${DEALS_DATASET}/sql`, {
     method: 'POST',
@@ -99,8 +119,8 @@ export function lit(s) {
 
 function areaCte(geometry) {
   return `area AS (
-  SELECT extensions.ST_MakeValid(extensions.ST_SetSRID(
-    extensions.ST_GeomFromGeoJSON(${lit(JSON.stringify(geometry))}), 4326)) AS g
+  SELECT ${gis}.ST_MakeValid(${gis}.ST_SetSRID(
+    ${gis}.ST_GeomFromGeoJSON(${lit(JSON.stringify(geometry))}), 4326)) AS g
 )`;
 }
 
@@ -117,19 +137,19 @@ export const SHUMA_GUSH_TABLE = 'append_e_data_gov_il_d8d30a03';
 // Each parcel carries its area: the registered (legal) area when the layer
 // gives one, otherwise the area measured from the polygon (area_src 'g').
 const legalArea = (c) => `max(CASE WHEN ${c} ~ '^[0-9]+(\\.[0-9]+)?$' THEN ${c}::numeric END)`;
-const measuredArea = (c) => `max(extensions.ST_Area(${c}::extensions.geography))`;
-const PARCELS_CTE = `parcel_rows AS (
+const measuredArea = (c) => `max(${gis}.ST_Area(${c}::${gis}.geography))`;
+const parcelsCte = () => `parcel_rows AS (
   SELECT p."GUSH_NUM" AS gush, p."PARCEL" AS chelka, 's' AS src,
     ${legalArea('p."LEGAL_AREA"')} AS legal, ${measuredArea('p.geom')} AS measured
   FROM ${PARCELS_TABLE} p, area
-  WHERE extensions.ST_Intersects(p.geom, area.g)
-    AND extensions.ST_Within(extensions.ST_PointOnSurface(p.geom), area.g)
+  WHERE ${gis}.ST_Intersects(p.geom, area.g)
+    AND ${gis}.ST_Within(${gis}.ST_PointOnSurface(p.geom), area.g)
   GROUP BY 1, 2
   UNION ALL
   SELECT m."GUSH_NUM", m."PARCEL", 'm', ${legalArea('m."LEGAL_AREA"')}, ${measuredArea('m.geom')}
   FROM ${SHUMA_PARCELS_TABLE} m, area
-  WHERE extensions.ST_Intersects(m.geom, area.g)
-    AND extensions.ST_Within(extensions.ST_PointOnSurface(m.geom), area.g)
+  WHERE ${gis}.ST_Intersects(m.geom, area.g)
+    AND ${gis}.ST_Within(${gis}.ST_PointOnSurface(m.geom), area.g)
     AND NOT EXISTS (SELECT 1 FROM ${PARCELS_TABLE} x WHERE x."GUSH_NUM" = m."GUSH_NUM" AND x."PARCEL" = m."PARCEL")
   GROUP BY 1, 2
 ),
@@ -160,15 +180,15 @@ function dealsCte(f) {
 // covers. Households approximate OCCUPIED dwellings; OVER holds no count of
 // the whole housing stock.
 export const STAT_AREAS_TABLE = 'append_cbs_pub_file_7a4d3897_38170565';
-const HOUSEHOLDS_CTE = `households AS (
+const householdsCte = () => `households AS (
   SELECT
     sum(NULLIF(s.hh_total_approx, '')::numeric
-        * extensions.ST_Area(extensions.ST_Intersection(extensions.ST_MakeValid(s.geom), area.g))
-        / NULLIF(extensions.ST_Area(extensions.ST_MakeValid(s.geom)), 0)) AS hh,
+        * ${gis}.ST_Area(${gis}.ST_Intersection(${gis}.ST_MakeValid(s.geom), area.g))
+        / NULLIF(${gis}.ST_Area(${gis}.ST_MakeValid(s.geom)), 0)) AS hh,
     count(*) AS stat_areas,
     count(*) FILTER (WHERE NULLIF(s.hh_total_approx, '') IS NULL) AS stat_areas_no_hh
   FROM ${STAT_AREAS_TABLE} s, area
-  WHERE extensions.ST_Intersects(s.geom, area.g)
+  WHERE ${gis}.ST_Intersects(s.geom, area.g)
 )`;
 
 // The deals come back as ONE row holding a JSON array of compact arrays
@@ -179,14 +199,15 @@ const HOUSEHOLDS_CTE = `households AS (
 // parcel_area (m²) is the parcel's registered area, or measured from its polygon when area_src is 'g'.
 // declared is null when it equals the amount (95%+ of rows), to halve the payload.
 export const MAX_DEALS = 150000;
+// Call (and await) postgisSchema() first, so the SQL names the right schema.
 export function dealsSql(geometry, f) {
   // A guarded cast: one stray non-numeric value in a re-scraped register must
   // not fail the whole area's query. (A 12% sample found none today.)
   const n = (c) => `CASE WHEN ${c} ~ '^[0-9]+(\\.[0-9]+)?$' THEN ${c}::numeric END`;
   return `WITH ${areaCte(geometry)},
-${PARCELS_CTE},
+${parcelsCte()},
 ${dealsCte(f)},
-${HOUSEHOLDS_CTE}
+${householdsCte()}
 SELECT
   (SELECT count(*) FROM parcels) AS parcels_in_area,
   (SELECT count(*) FROM parcels WHERE src = 'm') AS shuma_parcels,
@@ -230,11 +251,12 @@ export const PICK_LAYERS = {
   },
 };
 export async function polygonAt(kind, lat, lon) {
+  await postgisSchema();
   const L = PICK_LAYERS[kind];
   const sql = `SELECT ${L.name} AS name,
-  extensions.ST_AsGeoJSON(extensions.ST_SimplifyPreserveTopology(extensions.ST_MakeValid(geom), 0.00002), 6) AS geojson
+  ${gis}.ST_AsGeoJSON(${gis}.ST_SimplifyPreserveTopology(${gis}.ST_MakeValid(geom), 0.00002), 6) AS geojson
 FROM ${L.table}
-WHERE extensions.ST_Intersects(geom, extensions.ST_SetSRID(extensions.ST_MakePoint(${Number(lon)}, ${Number(lat)}), 4326))
+WHERE ${gis}.ST_Intersects(geom, ${gis}.ST_SetSRID(${gis}.ST_MakePoint(${Number(lon)}, ${Number(lat)}), 4326))
 LIMIT 1`;
   const r = await runSql(sql);
   const row = r.rows?.[0];
@@ -267,7 +289,8 @@ export async function parcelGeometry(gush, helka) {
     const r = await getJson(`${OVER}/api/nadlan/parcel/${gush}/${helka}/geometry`);
     return { ...r, geometry: JSON.parse(r.geojson), shuma: false };
   } catch (e) {
-    const sql = `SELECT extensions.ST_AsGeoJSON(geom, 6) AS geojson, "LEGAL_AREA" AS legal_area
+    await postgisSchema();
+    const sql = `SELECT ${gis}.ST_AsGeoJSON(geom, 6) AS geojson, "LEGAL_AREA" AS legal_area
 FROM ${SHUMA_PARCELS_TABLE} WHERE "GUSH_NUM" = ${lit(String(Number(gush)))} AND "PARCEL" = ${lit(String(Number(helka)))} LIMIT 1`;
     const row = (await runSql(sql)).rows?.[0];
     if (!row) throw e;
@@ -276,13 +299,14 @@ FROM ${SHUMA_PARCELS_TABLE} WHERE "GUSH_NUM" = ${lit(String(Number(gush)))} AND 
 }
 
 export async function gushExtent(gush) {
-  const sql = `SELECT extensions.ST_AsGeoJSON(extensions.ST_Extent(geom)) AS box, count(*) AS parcels
+  await postgisSchema();
+  const sql = `SELECT ${gis}.ST_AsGeoJSON(${gis}.ST_Extent(geom)) AS box, count(*) AS parcels
 FROM ${PARCELS_TABLE} WHERE "GUSH_NUM" = ${lit(String(Number(gush)))}`;
   const r = await runSql(sql);
   const row = r.rows?.[0];
   if (row?.box) return { box: JSON.parse(row.box), parcels: row.parcels, shuma: false };
   // Not in the statutory parcels: the tax-assessment block (גוש שומה), marked.
-  const s = (await runSql(`SELECT extensions.ST_AsGeoJSON(extensions.ST_Union(geom), 6) AS geom
+  const s = (await runSql(`SELECT ${gis}.ST_AsGeoJSON(${gis}.ST_Union(geom), 6) AS geom
 FROM ${SHUMA_GUSH_TABLE} WHERE "GUSH_NUM" = ${lit(String(Number(gush)))}`)).rows?.[0];
   if (!s?.geom) return null;
   return { box: JSON.parse(s.geom), parcels: null, shuma: true };
