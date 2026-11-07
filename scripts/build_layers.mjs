@@ -30,8 +30,24 @@ const PAGE = 600;
 const PAUSE_MS = 3500; // 20 queries a minute
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const geo = `extensions.ST_AsGeoJSON(extensions.ST_SimplifyPreserveTopology(extensions.ST_MakeValid(geom),
-  CASE WHEN extensions.ST_Area(geom) > ${BIG_AREA} THEN ${SIMPLIFY_BIG} ELSE ${SIMPLIFY} END), 5)`;
+async function run(sql) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const res = await fetch(SQL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql }) });
+    if (res.status === 429) { await sleep(15000); continue; }
+    const body = await res.json();
+    if (!res.ok) throw new Error(`${res.status}: ${JSON.stringify(body.detail)}`);
+    return body.rows;
+  }
+  throw new Error('rate limited');
+}
+
+// The schema PostGIS lives in on OVER's database (was `extensions`, moving to
+// `postgis`): read once, and every PostGIS name below is qualified with it.
+const gis = await run("SELECT extnamespace::regnamespace::text AS schema FROM pg_extension WHERE extname = 'postgis'")
+  .then((rows) => rows[0]?.schema)
+  .then((s) => (/^[a-z_][a-z0-9_]*$/.test(s || '') ? s : 'extensions'));
+const geo = `${gis}.ST_AsGeoJSON(${gis}.ST_SimplifyPreserveTopology(${gis}.ST_MakeValid(geom),
+  CASE WHEN ${gis}.ST_Area(geom) > ${BIG_AREA} THEN ${SIMPLIFY_BIG} ELSE ${SIMPLIFY} END), 5)`;
 // Guarded numeric cast of a text column expression (missing values are '').
 const num = (e) => `CASE WHEN ${e} ~ '^-?[0-9]+(\\.[0-9]+)?$' THEN ${e}::numeric END`;
 
@@ -43,8 +59,8 @@ const LAYERS = {
     // gush+suffix WITHOUT geometry, page through those keys, and simplify only
     // the page (simplifying all 37k rows first hit OVER's 10 s limit).
     page: (limit, offset) => `SELECT k.id, k.gush, k.suffix, k.locality, k.status,
-        extensions.ST_AsGeoJSON(extensions.ST_SimplifyPreserveTopology(extensions.ST_MakeValid(t.geom),
-          CASE WHEN extensions.ST_Area(t.geom) > ${BIG_AREA} THEN ${SIMPLIFY_BIG} ELSE ${SIMPLIFY} END), 5) AS g
+        ${gis}.ST_AsGeoJSON(${gis}.ST_SimplifyPreserveTopology(${gis}.ST_MakeValid(t.geom),
+          CASE WHEN ${gis}.ST_Area(t.geom) > ${BIG_AREA} THEN ${SIMPLIFY_BIG} ELSE ${SIMPLIFY} END), 5) AS g
       FROM (SELECT DISTINCT ON ("GUSH_NUM", "GUSH_SUFFI")
               "GUSH_NUM" || '-' || coalesce(NULLIF("GUSH_SUFFI", ''), '0') AS id,
               "GUSH_NUM" AS gush, "GUSH_SUFFI" AS suffix, "LOCALITY_N" AS locality, "STATUS_TEX" AS status, row_hash
@@ -58,8 +74,8 @@ const LAYERS = {
     // and picking, not for the deal join.)
     extraPage: (limit, offset) => `SELECT 'S-' || "GUSH_NUM" || '-' || coalesce(NULLIF("GUSH_SUFFI", ''), '0') AS id,
         "GUSH_NUM" AS gush, "GUSH_SUFFI" AS suffix, '' AS locality, 'גוש שומה' AS status, 'shuma' AS kind,
-        extensions.ST_AsGeoJSON(extensions.ST_SimplifyPreserveTopology(extensions.ST_MakeValid(geom),
-          CASE WHEN extensions.ST_Area(geom) > ${BIG_AREA} THEN ${SIMPLIFY_BIG} ELSE ${SIMPLIFY} END), 5) AS g
+        ${gis}.ST_AsGeoJSON(${gis}.ST_SimplifyPreserveTopology(${gis}.ST_MakeValid(geom),
+          CASE WHEN ${gis}.ST_Area(geom) > ${BIG_AREA} THEN ${SIMPLIFY_BIG} ELSE ${SIMPLIFY} END), 5) AS g
       FROM append_e_data_gov_il_d8d30a03
       WHERE geom IS NOT NULL
         AND "GUSH_NUM" NOT IN (SELECT DISTINCT "GUSH_NUM" FROM append_subgushallshape_aa29e909)
@@ -112,16 +128,6 @@ const LAYERS = {
   },
 };
 
-async function run(sql) {
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const res = await fetch(SQL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql }) });
-    if (res.status === 429) { await sleep(15000); continue; }
-    const body = await res.json();
-    if (!res.ok) throw new Error(`${res.status}: ${JSON.stringify(body.detail)}`);
-    return body.rows;
-  }
-  throw new Error('rate limited');
-}
 
 function bbox(geometry) {
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
