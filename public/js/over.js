@@ -39,7 +39,7 @@ async function getJson(url, opts = {}) {
     throw new Error('אין תקשורת עם OVER: ' + e.message);
   }
   if (res.status === 429) {
-    throw new Error('OVER הגביל את קצב הבקשות (עד 20 שאילתות בדקה). המתינו דקה ונסו שוב.');
+    throw new Error('OVER הגביל את קצב הבקשות (עד 120 שאילתות בדקה, 4 במקביל). המתינו כמה שניות ונסו שוב.');
   }
   let body;
   try {
