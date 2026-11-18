@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { identity, loginUrl, LOGOUT_URL } from './server/auth.js';
 import { createStore, roleOf, ROLES, ENV_ADMINS } from './server/store.js';
+import { mountOverProxy, overSqlConfigured } from './server/overProxy.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), 'public');
 const store = createStore();
@@ -37,6 +38,10 @@ app.use((req, res, next) => {
   next();
 });
 
+
+// SQL to OVER, with the site's token added (server/overProxy.js). Before the
+// identity lookup: a query needs no account.
+mountOverProxy(app);
 
 // ── who is asking (optional) ────────────────────────────────────────────────
 // Express 4 does not catch a rejected promise: every async handler goes
@@ -134,4 +139,4 @@ app.use(express.static(ROOT, {
 
 // xhostd renamed XHOST_* to XHOSTD_* (2026-10); the old name and PORT stay as fallbacks.
 const port = Number(process.env.XHOSTD_HTTP_PORT || process.env.XHOST_HTTP_PORT || process.env.PORT || 5190);
-app.listen(port, '0.0.0.0', () => console.log(`listening on 0.0.0.0:${port} (store: ${store.kind}, env admins: ${ENV_ADMINS.size}, open to all)`));
+app.listen(port, '0.0.0.0', () => console.log(`listening on 0.0.0.0:${port} (store: ${store.kind}, env admins: ${ENV_ADMINS.size}, OVER token: ${overSqlConfigured ? 'set' : 'MISSING'}, open to all)`));

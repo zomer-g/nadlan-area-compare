@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node scripts/dev.mjs",
-    "test": "node --test tests/stats.test.mjs tests/analysis.test.mjs tests/external.test.mjs tests/layers.test.mjs tests/server.test.mjs",
+    "test": "node --test tests/stats.test.mjs tests/analysis.test.mjs tests/external.test.mjs tests/layers.test.mjs tests/server.test.mjs tests/overproxy.test.mjs",
     "stamp": "node scripts/stamp.mjs",
     "layers": "node scripts/build_layers.mjs"
   },

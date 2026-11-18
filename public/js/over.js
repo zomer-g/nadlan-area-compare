@@ -39,7 +39,8 @@ async function getJson(url, opts = {}) {
     throw new Error('אין תקשורת עם OVER: ' + e.message);
   }
   if (res.status === 429) {
-    throw new Error('OVER הגביל את קצב הבקשות (עד 120 שאילתות בדקה, 4 במקביל). המתינו כמה שניות ונסו שוב.');
+    const wait = Number(res.headers.get('retry-after'));
+    throw new Error(`OVER הגביל את קצב הבקשות (עד 120 שאילתות בדקה, 4 במקביל). ${wait > 0 ? `נסו שוב בעוד ${wait} שניות.` : 'המתינו כמה שניות ונסו שוב.'}`);
   }
   let body;
   try {
@@ -90,7 +91,8 @@ export function postgisSchema() {
 }
 
 export async function runSql(sql) {
-  return getJson(`${OVER}/api/append/${DEALS_DATASET}/sql`, {
+  // Through this site's server, which adds the OVER token (server/overProxy.js).
+  return getJson('/api/over/sql', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ sql }),
