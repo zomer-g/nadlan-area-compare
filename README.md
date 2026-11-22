@@ -112,6 +112,14 @@ npm test
 npm run stamp   # לפני כל פרסום: חותמת גרסה על כתובות הקבצים, כדי שדפדפנים לא יריצו קוד ישן
 ```
 
+## התקנה כאפליקציה (PWA)
+
+אפשר להתקין את האתר כאפליקציה (Chrome, Edge, Android: כפתור "התקנה" קטן בראש הדף; iPhone: שיתוף ← הוספה למסך הבית). הקבצים: [`public/manifest.webmanifest`](public/manifest.webmanifest), [`public/sw.js`](public/sw.js) (service worker), [`public/js/pwa.js`](public/js/pwa.js) (רישום וכפתור ההתקנה), [`public/offline.html`](public/offline.html), והאייקונים ב-[`public/icons/`](public/icons) (נוצרים מהפאביקון ב-`python scripts/build_icons.py`).
+
+- **מה נשמר במכשיר:** מעטפת האתר בלבד — הדפים, ה-JS, ה-CSS, האייקונים, הטבלאות שב-`data/external` ומניפסט השכבות. אריחי השכבות (כ-20MB) נשמרים רק כשהמפה מבקשת אותם. בלי רשת הדף נפתח מהעותק השמור; דף שלא נשמר מציג הודעת "אין חיבור לרשת".
+- **מה לעולם לא נשמר:** כל בקשה ל-OVER (`over.org.il`), כל `/api/` של השרת (כולל `/api/over/sql`), הכניסה (`/xhost-auth/`) ו-`/admin`. ה-service worker לא מתערב בהן כלל, כך שנתוני העסקאות תמיד חיים, והטיפול ב-timeout ובשגיאות ב-`over.js` נשאר כמו שהוא.
+- **עדכון:** `npm run stamp` כותב את אותה חותמת גרסה גם ל-`sw.js` (שם המטמון ורשימת הקבצים). אחרי פרסום, הביקור הראשון עוד מציג את הגרסה הקודמת ומתקין את החדשה ברקע; מהביקור הבא — הגרסה החדשה, והמטמון הישן נמחק. השרת מגיש את `sw.js` ואת המניפסט עם `Cache-Control: no-cache`.
+
 ## פריסה
 
 האתר רץ כאפליקציה ב-xhostd (תבנית `app`): [`install.sh`](install.sh) מתקין תלויות בבנייה, ו-[`launch.sh`](launch.sh) מריץ את `server.js`. השרת מאזין ל-`XHOSTD_HTTP_PORT` (ואם אין, ל-`XHOST_HTTP_PORT` הישן או ל-`PORT`). בדיקת התקינות היא `GET /`, שמחזיר את הדף. משתני סביבה: `ADMIN_EMAILS`, `APP_HOSTS`, ו-`OVER_SQL_TOKEN` (סוד, אותו ערך כמו `SQL_PROXY_TOKEN` ב-OVER; בלעדיו השאילתות נדחות ב-401); את `DATABASE_URL` מזריקה הפלטפורמה.

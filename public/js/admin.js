@@ -1,6 +1,6 @@
 // User management: list, add, change role, remove. The site is open to all;
 // what a role grants is admin access to this page.
-import { esc } from './util.js?v=6ce655d835';
+import { esc } from './util.js?v=3de6768137';
 
 const $ = (s) => document.querySelector(s);
 const ROLE = { admin: 'אדמין', viewer: 'רגיל' };

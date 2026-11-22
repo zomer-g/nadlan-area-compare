@@ -132,7 +132,13 @@ app.use(express.static(ROOT, {
   extensions: ['html'], // /terms serves terms.html
   setHeaders(res, path) {
     // HTML always revalidates; versioned assets (?v=) and tiles may be cached.
-    if (path.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache');
+    // The service worker (public/sw.js, at the root so its scope is the whole
+    // site) and the web app manifest revalidate too: a deploy changes sw.js,
+    // and the browser must see that to install the new version.
+    if (path.endsWith('.webmanifest')) {
+      res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-cache');
+    } else if (path.endsWith('.html') || path === join(ROOT, 'sw.js')) res.setHeader('Cache-Control', 'no-cache');
     else res.setHeader('Cache-Control', 'private, max-age=86400');
   },
 }));

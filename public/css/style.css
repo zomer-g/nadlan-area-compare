@@ -176,3 +176,9 @@ main.doc { max-width: 820px; line-height: 1.65; }
 main.doc h3 { margin: 1rem 0 .3rem; font-size: 1rem; }
 main.doc ul { padding-inline-start: 1.3rem; margin: .3rem 0; }
 main.doc li { margin: .25rem 0; }
+
+/* Install prompt (js/pwa.js): one small button in the header, with a ×. */
+.install { display: inline-flex; align-items: center; gap: .2rem; margin-bottom: .3rem; }
+.install .install-go { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+.install .install-x { background: none; border: 0; padding: 0 .3rem; color: var(--muted); font-size: 1rem; line-height: 1; cursor: pointer; }
+.install .install-x:hover { color: var(--text); }
